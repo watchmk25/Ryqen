@@ -1,0 +1,156 @@
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
+
+export type ContextSource = 'user' | 'system' | 'integration' | 'ai'
+export type GoalStatus = 'active' | 'completed' | 'paused' | 'archived'
+export type ProjectStatus = GoalStatus
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'blocked' | 'deferred'
+export type ActionStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'deferred'
+export type DailyPlanStatus = 'draft' | 'active' | 'completed' | 'archived'
+export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'skipped' | 'deferred' | 'replaced'
+export type ActivityType =
+  | 'action_started'
+  | 'action_completed'
+  | 'action_deferred'
+  | 'action_skipped'
+  | 'task_started'
+  | 'task_completed'
+  | 'plan_item_started'
+  | 'plan_item_completed'
+  | 'plan_item_skipped'
+  | 'goal_progress'
+
+export interface Context {
+  id: string
+  userId: string
+  key: string
+  value: JsonValue
+  source: ContextSource
+  expiresAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Goal {
+  id: string
+  userId: string
+  title: string
+  description: string | null
+  status: GoalStatus
+  importance: number
+  targetDate: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Project {
+  id: string
+  userId: string
+  goalId: string | null
+  title: string
+  description: string | null
+  status: ProjectStatus
+  importance: number
+  targetDate: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Task {
+  id: string
+  userId: string
+  projectId: string | null
+  goalId: string | null
+  title: string
+  description: string | null
+  status: TaskStatus
+  importance: number
+  urgency: number
+  estimatedMinutes: number | null
+  dueAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Action {
+  id: string
+  userId: string
+  taskId: string | null
+  projectId: string | null
+  goalId: string | null
+  title: string
+  description: string | null
+  status: ActionStatus
+  estimatedMinutes: number | null
+  dueAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DailyPlan {
+  id: string
+  userId: string
+  planDate: string
+  status: DailyPlanStatus
+  contextSnapshot: JsonValue
+  generatedAt: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PlanItem {
+  id: string
+  dailyPlanId: string
+  actionId: string
+  position: number
+  priorityScore: number
+  rationale: string | null
+  estimatedMinutes: number | null
+  status: PlanItemStatus
+  createdAt: string
+}
+
+export interface Activity {
+  id: string
+  userId: string
+  actionId: string | null
+  taskId: string | null
+  type: ActivityType
+  metadata: JsonValue
+  occurredAt: string
+  createdAt: string
+}
+
+export interface PlanningData {
+  contexts: Context[]
+  goals: Goal[]
+  projects: Project[]
+  tasks: Task[]
+  actions: Action[]
+}
+
+export interface PlanningContext {
+  availableTimeMinutes: number | null
+  capacity: 'low' | 'medium' | 'high' | null
+  preferShortActions: boolean
+  preferredActionIds: string[]
+  preferredProjectIds: string[]
+  preferredGoalIds: string[]
+  blockedActionIds: string[]
+}
+
+export interface PriorityAction {
+  action: Action
+  task: Task | null
+  project: Project | null
+  goal: Goal | null
+  estimatedMinutes: number
+  priorityScore: number
+  rationale: string
+}
+
+export interface TodayPlanState {
+  plan: DailyPlan | null
+  planItems: PlanItem[]
+  priorities: PriorityAction[]
+  planningContext: PlanningContext
+}
