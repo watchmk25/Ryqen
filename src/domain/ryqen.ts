@@ -152,5 +152,6 @@ export interface TodayPlanState {
   plan: DailyPlan | null
   planItems: PlanItem[]
   priorities: PriorityAction[]
+  actions: Action[]
   planningContext: PlanningContext
 }

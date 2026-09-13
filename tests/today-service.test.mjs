@@ -185,3 +185,14 @@ test('plan-item persistence preserves one item per action and plan', async () =>
 
   assert.equal(repository.planItems.length, 1)
 })
+
+test('returns the action records needed to present deferred work after replanning', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  const service = new TodayService(repository)
+
+  const state = await service.deferAction(userId, 'action-1', now)
+
+  assert.equal(state.actions.find((action) => action.id === 'action-1')?.status, 'deferred')
+  assert.equal(state.planItems.find((item) => item.actionId === 'action-1')?.status, 'deferred')
+  assert.equal(state.priorities.length, 0)
+})

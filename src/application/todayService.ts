@@ -31,7 +31,7 @@ export class TodayService {
 
     if (!plan) {
       if (priorities.length === 0) {
-        return { plan: null, planItems: [], priorities: [], planningContext }
+        return { plan: null, planItems: [], priorities: [], actions: data.actions, planningContext }
       }
       try {
         plan = await this.repository.createDailyPlan({
@@ -88,6 +88,7 @@ export class TodayService {
       plan,
       planItems: await this.repository.listPlanItems(plan.id),
       priorities: currentPriorities,
+      actions: data.actions,
       planningContext,
     }
   }

@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase'
 import type {
   Action,
+  ActionStatus,
   Context,
   ContextSource,
   DailyPlan,

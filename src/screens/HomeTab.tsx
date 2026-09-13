@@ -1,145 +1,220 @@
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native'
-import { useAuthStore } from '../store/authStore'
-import { supabase } from '../lib/supabase'
-import { C, T, RANK_COLORS, STAT_COLORS } from '../constants'
-import { calcLevel, calcXpIntoLevel, calcXpPct } from '../utils'
-import { XP_PER_LEVEL } from '../constants'
+import { useState } from 'react'
+import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow } from '../components'
-import type { Quest, Character } from '../types'
+import { C, RANK_COLORS, T } from '../constants'
+import type { Action, PlanItem, PriorityAction } from '../domain'
+import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
-  xp: number; setXp: (xp: number) => void
-  quests: Quest[]; setQuests: React.Dispatch<React.SetStateAction<Quest[]>>
-  character: Character; showToast: (msg: string) => void
+  userId: string
+  userName: string
+  rank: string
   onNavigateToTools: (tool: 'water' | 'focus') => void
-  currentStreak: number; streakShields: number
-  checkStreakForToday: (updatedQuests: Quest[]) => void
 }
 
-export function HomeTab({ xp, setXp, quests, setQuests, character, showToast, onNavigateToTools, currentStreak, streakShields, checkStreakForToday }: HomeTabProps) {
-  const { user } = useAuthStore()
-  const level = calcLevel(xp)
-  const xpIntoLevel = calcXpIntoLevel(xp)
-  const xpPct = calcXpPct(xp)
-  const rankColor = RANK_COLORS[character.rank]
-  const completedCount = quests.filter(q => q.status === 'completed').length
-
-  async function toggleQuest(id: string) {
-  const quest = quests.find(q => q.id === id)!
-  const newStatus = quest.status !== 'completed' ? 'completed' : 'available'
-  let updatedQuests: Quest[] = []
-  setQuests(prev => {
-    const updated = prev.map(q => q.id === id ? { ...q, status: newStatus } : q)
-    updatedQuests = updated
-    const totalEarned = updated.filter(q => q.status === 'completed').reduce((sum, q) => sum + q.xp, 0)
-    setXp(totalEarned)
-    if (newStatus === 'completed') showToast(`+${quest.xp} XP  ·  ${quest.stat}`)
-    return updated
-  })
-  await supabase.from('quests').update({ status: newStatus }).eq('id', id)
-  checkStreakForToday(updatedQuests)
+type PriorityCardProps = {
+  priority: PriorityAction
+  planItem: PlanItem | undefined
+  position: number
+  pending: boolean
+  onStart: (actionId: string) => void
+  onComplete: (actionId: string) => void
+  onDefer: (actionId: string) => void
+  onSkip: (actionId: string) => void
 }
 
-  const greeting = (() => {
-    const h = new Date().getHours()
-    return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
-  })()
+function greetingForNow(): string {
+  const hour = new Date().getHours()
+  return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+}
+
+function PriorityCard({ priority, planItem, position, pending, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
+  const isLead = position === 1
+  const isInProgress = priority.action.status === 'in_progress'
+  const disabled = pending || !planItem
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-      <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 20 }}>
+    <View style={{
+      backgroundColor: isLead ? C.accentDim : C.surface,
+      borderColor: isLead ? C.accent + '80' : C.surface,
+      borderWidth: isLead ? 1 : 0,
+      borderRadius: 16,
+      padding: isLead ? 16 : 12,
+      gap: 10,
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+        <View style={{
+          width: isLead ? 28 : 22,
+          height: isLead ? 28 : 22,
+          borderRadius: 14,
+          backgroundColor: isLead ? C.accent : C.surface2,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+          <Text style={{ color: isLead ? '#fff' : C.t2, fontSize: 12, fontWeight: '800' }}>{position}</Text>
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          {isLead && <Text style={{ color: C.accent, fontSize: 10, fontWeight: '800', letterSpacing: 1 }}>PRIORITY ONE</Text>}
+          <Text numberOfLines={isLead ? 2 : 1} style={{ color: C.t1, fontSize: isLead ? 20 : 16, fontWeight: isLead ? '700' : '600', lineHeight: isLead ? 24 : 20 }}>
+            {priority.action.title}
+          </Text>
+          <Text style={{ color: C.t2, fontSize: 12, lineHeight: 15 }}>{priority.estimatedMinutes} min</Text>
+        </View>
+        {isInProgress && <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>IN PROGRESS</Text>}
+      </View>
+
+      <View style={{ borderLeftWidth: 2, borderLeftColor: isLead ? C.accent : C.sep, paddingLeft: 8 }}>
+        <Text numberOfLines={isLead ? 2 : 1} style={{ color: C.t1, fontSize: isLead ? 14 : 13, lineHeight: isLead ? 18 : 17 }}>
+          <Text style={{ color: C.t2, fontSize: 10, fontWeight: '800', letterSpacing: 0.6 }}>WHY  </Text>
+          {priority.rationale}
+        </Text>
+      </View>
+
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity
+          disabled={disabled}
+          onPress={() => isInProgress ? onComplete(priority.action.id) : onStart(priority.action.id)}
+          style={{ flex: 1, height: 44, backgroundColor: disabled ? C.surface2 : C.accent, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{pending ? 'Updating...' : isInProgress ? 'Complete' : 'Start'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          disabled={disabled}
+          onPress={() => onDefer(priority.action.id)}
+          style={{ minWidth: 58, height: 44, backgroundColor: C.surface2, borderRadius: 11, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
+        >
+          <Text style={{ color: C.t1, fontSize: 12, fontWeight: '700' }}>Defer</Text>
+        </TouchableOpacity>
+        {!isInProgress && (
+          <TouchableOpacity
+            disabled={disabled}
+            onPress={() => onSkip(priority.action.id)}
+            style={{ minWidth: 54, height: 44, backgroundColor: C.surface2, borderRadius: 11, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <Text style={{ color: C.t2, fontSize: 12, fontWeight: '700' }}>Skip</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  )
+}
+
+export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabProps) {
+  const [showDeferred, setShowDeferred] = useState(false)
+  const {
+    state,
+    loading,
+    pendingActionId,
+    error,
+    startAction,
+    completeAction,
+    deferAction,
+    skipPlanItem,
+    reconsiderDeferredAction,
+  } = useTodayPlan(userId)
+
+  const deferredItems = state?.planItems
+    .filter((item) => item.status === 'deferred')
+    .map((item) => ({ item, action: state.actions.find((action) => action.id === item.actionId) }))
+    .filter((entry): entry is { item: PlanItem; action: Action } => entry.action !== undefined)
+    ?? []
+  const completedCount = state?.planItems.filter((item) => item.status === 'completed').length ?? 0
+  const rankColor = RANK_COLORS[rank] ?? C.accent
+
+  return (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+      <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 18 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View style={{ flex: 1 }}>
-            <Text style={[T.footnote, { marginBottom: 4 }]}>{greeting}</Text>
-            <Text style={T.largeTitle}>{character.name}</Text>
-            <Text style={[T.footnote, { marginTop: 4 }]}>{completedCount} of {quests.length} quests complete</Text>
+            <Text style={[T.footnote, { marginBottom: 4 }]}>{greetingForNow()}</Text>
+            <Text style={[T.title2, { fontSize: 22, lineHeight: 27 }]} numberOfLines={1}>{userName}</Text>
           </View>
-          <View style={{
-            width: 44, height: 44, borderRadius: 12,
-            backgroundColor: rankColor + '18',
-            alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Text style={{ fontSize: 18, fontWeight: '700', color: rankColor }}>{character.rank}</Text>
+          <View style={{ width: 42, height: 42, borderRadius: 13, backgroundColor: rankColor + '18', alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ color: rankColor, fontSize: 18, fontWeight: '800' }}>{rank}</Text>
           </View>
+        </View>
+        <View style={{ marginTop: 18, gap: 3 }}>
+          <Text style={{ color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.3 }}>TODAY</Text>
+          <Text style={[T.headline, { fontSize: 17, lineHeight: 21 }]}>{"Here's what matters right now."}</Text>
         </View>
       </View>
 
-      {currentStreak > 0 && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 20, marginBottom: 16 }}>
-          <Text style={{ fontSize: 14 }}>🔥</Text>
-          <Text style={{ fontSize: 13, fontWeight: '600', color: C.t1 }}>{currentStreak} day streak</Text>
-          {streakShields > 0 && (
-            <Text style={{ fontSize: 12, color: C.t2 }}>🛡️ ×{streakShields}</Text>
-          )}
+      {loading && (
+        <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
+          <ActivityIndicator color={C.accent} size="large" />
+          <Text style={T.footnote}>Preparing your plan...</Text>
         </View>
-      )}    
+      )}
 
-      <View style={{ marginHorizontal: 20, backgroundColor: C.surface, borderRadius: 16, padding: 16, marginBottom: 16 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
-          <Text style={T.subhead}>{character.title}</Text>
-          <Text style={[T.footnote, { color: C.accent }]}>Level {level}</Text>
+      {!loading && error && (
+        <View style={{ marginHorizontal: 20, marginBottom: 16, backgroundColor: C.danger + '16', borderRadius: 16, padding: 16 }}>
+          <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>Today is unavailable</Text>
+          <Text style={[T.caption1, { marginTop: 4 }]}>{error}</Text>
         </View>
-        <View style={{ height: 4, backgroundColor: C.surface2, borderRadius: 2, overflow: 'hidden', marginBottom: 8 }}>
-          <View style={{ height: '100%', backgroundColor: C.accent, borderRadius: 2, width: `${xpPct}%` as any }} />
+      )}
+
+      {!loading && state && state.priorities.length > 0 && (
+        <View style={{ paddingHorizontal: 20, gap: 8 }}>
+          {state.priorities.slice(0, 3).map((priority, index) => (
+            <PriorityCard
+              key={priority.action.id}
+              priority={priority}
+              planItem={state.planItems.find((item) => item.actionId === priority.action.id)}
+              position={index + 1}
+              pending={pendingActionId === priority.action.id}
+              onStart={(actionId) => void startAction(actionId)}
+              onComplete={(actionId) => void completeAction(actionId)}
+              onDefer={(actionId) => void deferAction(actionId)}
+              onSkip={(actionId) => void skipPlanItem(actionId)}
+            />
+          ))}
         </View>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-          <Text style={T.caption1}>{xp} total XP</Text>
-          <Text style={T.caption1}>{xpIntoLevel} / {XP_PER_LEVEL} XP</Text>
+      )}
+
+      {!loading && state && state.priorities.length === 0 && (
+        <View style={{ marginHorizontal: 20, backgroundColor: C.surface, borderRadius: 18, padding: 20, gap: 6 }}>
+          <Text style={T.title3}>{state.plan ? "You're clear for now." : 'Nothing needs your attention right now.'}</Text>
+          <Text style={T.footnote}>
+            {completedCount > 0
+              ? `${completedCount} action${completedCount === 1 ? '' : 's'} completed today. It is okay to stop here.`
+              : 'When meaningful work is ready, Ryqen will help you choose a practical next step.'}
+          </Text>
         </View>
-      </View>
+      )}
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 8, marginBottom: 24 }}>
-        {Object.entries(character.stats).map(([key, val]) => (
-          <View key={key} style={{ backgroundColor: STAT_COLORS[key] + '14', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center', minWidth: 64 }}>
-            <Text style={{ fontSize: 11, fontWeight: '600', color: STAT_COLORS[key], marginBottom: 2 }}>{key}</Text>
-            <Text style={{ fontSize: 20, fontWeight: '700', color: C.t1 }}>{val}</Text>
-          </View>
-        ))}
-      </ScrollView>
-
-      <DailySummaryRow userId={user!.id} onWaterPress={() => onNavigateToTools('water')} onFocusPress={() => onNavigateToTools('focus')} />
-
-      <View style={{ paddingHorizontal: 20, gap: 12 }}>
-        <Text style={[T.footnote, { marginBottom: 4 }]}>Today's Quests</Text>
-        {quests.map(q => {
-          const done = q.status === 'completed'
-          return (
-            <TouchableOpacity
-              key={q.id}
-              style={{
-                backgroundColor: done ? C.surface2 : C.surface,
-                borderRadius: 16, padding: 16,
-                flexDirection: 'row', alignItems: 'center', gap: 14,
-              }}
-              onPress={() => toggleQuest(q.id)}
-              activeOpacity={0.7}
-            >
-              <View style={{
-                width: 26, height: 26, borderRadius: 13,
-                backgroundColor: done ? C.success : 'transparent',
-                borderWidth: done ? 0 : 2,
-                borderColor: C.sep,
-                alignItems: 'center', justifyContent: 'center',
-              }}>
-                {done && <Text style={{ color: '#000', fontSize: 14, fontWeight: '700' }}>✓</Text>}
+      {!loading && deferredItems.length > 0 && (
+        <View style={{ paddingHorizontal: 20, marginTop: 18, gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => setShowDeferred((visible) => !visible)}
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 }}
+          >
+            <Text style={T.footnote}>Deferred work ({deferredItems.length})</Text>
+            <Text style={{ color: C.t2, fontSize: 12, fontWeight: '700' }}>{showDeferred ? 'Hide' : 'Show'}</Text>
+          </TouchableOpacity>
+          {showDeferred && deferredItems.map(({ item, action }) => {
+            const pending = pendingActionId === action.id
+            return (
+              <View key={item.id} style={{ backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={T.subhead}>{action.title}</Text>
+                  <Text style={[T.caption1, { marginTop: 3 }]}>Not in your immediate plan</Text>
+                </View>
+                <TouchableOpacity
+                  disabled={pending}
+                  onPress={() => void reconsiderDeferredAction(action.id)}
+                  style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
+                >
+                  <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending ? 'Updating...' : 'Reconsider'}</Text>
+                </TouchableOpacity>
               </View>
-              <View style={{ flex: 1, gap: 3 }}>
-                <Text style={[T.subhead, { textDecorationLine: done ? 'line-through' : 'none', color: done ? C.t3 : C.t1 }]}>{q.title}</Text>
-                <Text style={{ fontSize: 12, fontWeight: '600', color: done ? C.t3 : STAT_COLORS[q.stat] }}>{q.stat}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 3 }}>
-                <Text style={{ fontSize: 14, fontWeight: '600', color: done ? C.t3 : C.accent }}>+{q.xp}</Text>
-                <Text style={{ fontSize: 11, fontWeight: '700', color: done ? C.t3 : RANK_COLORS[q.diff] }}>{q.diff}</Text>
-              </View>
-            </TouchableOpacity>
-          )
-        })}
-        {completedCount === quests.length && quests.length > 0 && (
-          <View style={{ backgroundColor: C.success + '14', borderRadius: 16, padding: 20, alignItems: 'center', marginTop: 4 }}>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: C.success, marginBottom: 4 }}>All quests complete</Text>
-            <Text style={T.caption1}>The System is watching. Rest and return tomorrow.</Text>
-          </View>
-        )}
+            )
+          })}
+        </View>
+      )}
+
+      <View style={{ marginTop: 18 }}>
+        <Text style={[T.caption1, { marginHorizontal: 20, marginBottom: 6, fontWeight: '700', letterSpacing: 0.8 }]}>SUPPORTING TODAY</Text>
+        <DailySummaryRow userId={userId} onWaterPress={() => onNavigateToTools('water')} onFocusPress={() => onNavigateToTools('focus')} />
       </View>
     </ScrollView>
   )
