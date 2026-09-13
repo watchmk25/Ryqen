@@ -57,6 +57,12 @@ export interface TodayActionMutationResult {
   planItem: PlanItem
 }
 
+export interface CreateCapturedActionInput {
+  title: string
+  importance: number
+  dueAt: string | null
+}
+
 /**
  * The application layer depends on this interface, rather than directly on
  * Supabase. It keeps planning testable without a signed-in session.
@@ -69,6 +75,7 @@ export interface RyqenRepository {
   listPlanItems(dailyPlanId: string): Promise<PlanItem[]>
   createPlanItems(inputs: CreatePlanItemInput[]): Promise<PlanItem[]>
   updatePlanItem(id: string, input: UpdatePlanItemInput): Promise<PlanItem>
+  createCapturedAction(input: CreateCapturedActionInput): Promise<Action>
   startTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   completeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   deferTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
@@ -140,6 +147,7 @@ function mapAction(row: DatabaseRow): Action {
     id: requireString(row.id, 'actions.id'), userId: requireString(row.user_id, 'actions.user_id'),
     taskId: nullableString(row.task_id), projectId: nullableString(row.project_id), goalId: nullableString(row.goal_id),
     title: requireString(row.title, 'actions.title'), description: nullableString(row.description), status: row.status as ActionStatus,
+    importance: Number(row.importance),
     estimatedMinutes: nullableNumber(row.estimated_minutes), dueAt: nullableString(row.due_at),
     createdAt: requireString(row.created_at, 'actions.created_at'), updatedAt: requireString(row.updated_at, 'actions.updated_at'),
   }
@@ -243,6 +251,15 @@ export class SupabaseRyqenRepository implements RyqenRepository {
     if (input.status !== undefined) values.status = input.status
     const result = await supabase.from('plan_items').update(values).eq('id', id).select('*').single()
     return mapPlanItem(unwrap(result.data, result.error, 'Update plan item') as DatabaseRow)
+  }
+
+  async createCapturedAction(input: CreateCapturedActionInput): Promise<Action> {
+    const result = await supabase.rpc('ryqen_capture_action', {
+      p_title: input.title,
+      p_importance: input.importance,
+      p_due_at: input.dueAt,
+    })
+    return mapAction(unwrap(result.data, result.error, 'Capture action') as DatabaseRow)
   }
 
   private async runTodayActionRpc(

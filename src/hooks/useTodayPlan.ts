@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
-import type { TodayPlanState } from '../domain'
+import type { TodayPlanState, WorkCaptureInput } from '../domain'
 
 type TodayOperation = 'start' | 'complete' | 'defer' | 'skip' | 'reconsider'
 
@@ -10,6 +10,7 @@ export function useTodayPlan(userId: string | undefined) {
   const [state, setState] = useState<TodayPlanState | null>(null)
   const [loading, setLoading] = useState(Boolean(userId))
   const [pendingActionId, setPendingActionId] = useState<string | null>(null)
+  const [capturing, setCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
@@ -58,10 +59,28 @@ export function useTodayPlan(userId: string | undefined) {
     }
   }, [reload, service, userId])
 
+  const captureAction = useCallback(async (input: WorkCaptureInput): Promise<boolean> => {
+    if (!userId) return false
+
+    setCapturing(true)
+    setError(null)
+    try {
+      setState(await service.captureAction(userId, input))
+      return true
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to capture this work.')
+      await reload()
+      return false
+    } finally {
+      setCapturing(false)
+    }
+  }, [reload, service, userId])
+
   return {
     state,
     loading,
     pendingActionId,
+    capturing,
     error,
     reload,
     startAction: (actionId: string) => perform('start', actionId),
@@ -69,5 +88,6 @@ export function useTodayPlan(userId: string | undefined) {
     deferAction: (actionId: string) => perform('defer', actionId),
     skipPlanItem: (actionId: string) => perform('skip', actionId),
     reconsiderDeferredAction: (actionId: string) => perform('reconsider', actionId),
+    captureAction,
   }
 }

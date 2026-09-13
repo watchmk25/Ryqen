@@ -8,7 +8,7 @@ const userId = 'user-1'
 function createAction(id, overrides = {}) {
   return {
     id, userId, taskId: null, projectId: null, goalId: null, title: id, description: null,
-    status: 'pending', estimatedMinutes: 15, dueAt: null,
+    status: 'pending', importance: 3, estimatedMinutes: 15, dueAt: null,
     createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', ...overrides,
   }
 }
@@ -19,6 +19,7 @@ class MemoryRyqenRepository {
     this.plans = []
     this.planItems = []
     this.activities = []
+    this.captureInputs = []
     this.sequence = 0
   }
 
@@ -52,6 +53,16 @@ class MemoryRyqenRepository {
     const item = this.planItems.find((candidate) => candidate.id === id)
     Object.assign(item, input)
     return this.clone(item)
+  }
+  async createCapturedAction(input) {
+    this.captureInputs.push(this.clone(input))
+    const action = createAction(this.nextId('captured-action'), {
+      title: input.title,
+      importance: input.importance,
+      dueAt: input.dueAt,
+    })
+    this.data.actions.push(action)
+    return this.clone(action)
   }
   async mutateTodayAction(planId, actionId, expectedActionStatuses, expectedPlanItemStatuses, actionStatus, planItemStatus, activityTypes) {
     const plan = this.plans.find((item) => item.id === planId && item.status === 'active')
@@ -195,4 +206,39 @@ test('returns the action records needed to present deferred work after replannin
   assert.equal(state.actions.find((action) => action.id === 'action-1')?.status, 'deferred')
   assert.equal(state.planItems.find((item) => item.actionId === 'action-1')?.status, 'deferred')
   assert.equal(state.priorities.length, 0)
+})
+
+test('captures a valid standalone action, refreshes Today, and creates no activity or quest', async () => {
+  const repository = new MemoryRyqenRepository([])
+  const service = new TodayService(repository)
+
+  const state = await service.captureAction(userId, {
+    title: '  Send the draft  ', dueTiming: 'today', importance: 'high',
+  }, now)
+
+  const action = repository.data.actions[0]
+  assert.equal(action.userId, userId)
+  assert.equal(action.taskId, null)
+  assert.equal(action.projectId, null)
+  assert.equal(action.goalId, null)
+  assert.equal(action.title, 'Send the draft')
+  assert.equal(action.status, 'pending')
+  assert.equal(action.importance, 5)
+  assert.equal(state.priorities[0].action.id, action.id)
+  assert.equal(repository.plans.length, 1)
+  assert.equal(repository.activities.length, 0)
+  assert.equal('userId' in repository.captureInputs[0], false)
+})
+
+test('rejects invalid captured titles before repository persistence', async () => {
+  const repository = new MemoryRyqenRepository([])
+  const service = new TodayService(repository)
+
+  await assert.rejects(() => service.captureAction(userId, {
+    title: ' ', dueTiming: 'none', importance: 'normal',
+  }, now), /title is required/)
+
+  assert.equal(repository.captureInputs.length, 0)
+  assert.equal(repository.data.actions.length, 0)
+  assert.equal(repository.activities.length, 0)
 })

@@ -80,6 +80,7 @@ export interface Action {
   title: string
   description: string | null
   status: ActionStatus
+  importance: number
   estimatedMinutes: number | null
   dueAt: string | null
   createdAt: string

@@ -64,8 +64,11 @@ function nearestDueDate(action: Action, task: Task | null, project: Project | nu
   return action.dueAt ?? task?.dueAt ?? project?.targetDate ?? goal?.targetDate ?? null
 }
 
-function contextualImportance(task: Task | null, project: Project | null, goal: Goal | null): number {
-  return Math.max(task?.importance ?? 3, project?.importance ?? 3, goal?.importance ?? 3)
+function contextualImportance(action: Action, task: Task | null, project: Project | null, goal: Goal | null): number {
+  if (task || project || goal) {
+    return Math.max(task?.importance ?? 3, project?.importance ?? 3, goal?.importance ?? 3)
+  }
+  return action.importance
 }
 
 function estimatedMinutes(action: Action, task: Task | null): number {
@@ -153,7 +156,7 @@ export function calculatePriority(action: Action, data: PlanningData, planningCo
   if (!parents) return null
   const { task, project, goal } = parents
   const minutes = estimatedMinutes(action, task)
-  const importance = contextualImportance(task, project, goal)
+  const importance = contextualImportance(action, task, project, goal)
   const urgency = task?.urgency ?? 3
   const due = dueDateAdjustment(nearestDueDate(action, task, project, goal), now)
   const preferred = planningContext.preferredActionIds.includes(action.id)

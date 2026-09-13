@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { canTransitionAction } from '../src/domain/actionTransitions.ts'
 import { derivePlanningContext, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
+import { dueAtForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
 
 const now = new Date('2026-09-12T09:00:00Z')
 const userId = 'user-1'
@@ -16,6 +17,7 @@ function action(id, overrides = {}) {
     title: id,
     description: null,
     status: 'pending',
+    importance: 3,
     estimatedMinutes: 20,
     dueAt: null,
     createdAt: '2026-09-01T00:00:00Z',
@@ -116,4 +118,46 @@ test('enforces the approved action lifecycle', () => {
   assert.equal(canTransitionAction('deferred', 'pending'), true)
   assert.equal(canTransitionAction('pending', 'completed'), false)
   assert.equal(canTransitionAction('completed', 'in_progress'), false)
+})
+
+test('maps capture importance and due timing deterministically', () => {
+  const captureNow = new Date('2026-09-12T09:00:00Z')
+  const today = dueAtForCapture('today', captureNow)
+  const tomorrow = dueAtForCapture('tomorrow', captureNow)
+
+  assert.equal(importanceForCapture('low'), 1)
+  assert.equal(importanceForCapture('normal'), 3)
+  assert.equal(importanceForCapture('high'), 5)
+  assert.equal(dueAtForCapture('later', captureNow), null)
+  assert.equal(dueAtForCapture('none', captureNow), null)
+  assert.equal(new Date(today).getDate(), captureNow.getDate())
+  assert.equal(new Date(tomorrow).getDate(), captureNow.getDate() + 1)
+})
+
+test('validates and trims captured work titles', () => {
+  assert.deepEqual(prepareWorkCapture({ title: '  Send the draft  ', dueTiming: 'none', importance: 'high' }, now), {
+    title: 'Send the draft',
+    dueAt: null,
+    importance: 5,
+  })
+  assert.throws(() => prepareWorkCapture({ title: '   ', dueTiming: 'today', importance: 'normal' }, now), /title is required/)
+})
+
+test('uses standalone action importance in deterministic prioritization', () => {
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [],
+    actions: [action('low', { importance: 1 }), action('high', { importance: 5 })],
+  }
+
+  assert.deepEqual(selectTodayPriorities(data, derivePlanningContext([], now), [], now).map((item) => item.action.id), ['high', 'low'])
+})
+
+test('preserves parent-derived importance for linked actions', () => {
+  const data = {
+    contexts: [], goals: [], projects: [],
+    tasks: [task('task', { importance: 5, urgency: 3 })],
+    actions: [action('linked', { taskId: 'task', importance: 1 }), action('standalone', { importance: 3 })],
+  }
+
+  assert.equal(selectTodayPriorities(data, derivePlanningContext([], now), [], now)[0].action.id, 'linked')
 })

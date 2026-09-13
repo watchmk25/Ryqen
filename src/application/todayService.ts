@@ -1,4 +1,5 @@
 import { createContextSnapshot, derivePlanningContext, selectTodayPriorities } from '../domain/planning'
+import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
 import type { TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
 
@@ -91,6 +92,12 @@ export class TodayService {
       actions: data.actions,
       planningContext,
     }
+  }
+
+  async captureAction(userId: string, input: WorkCaptureInput, now = new Date()): Promise<TodayPlanState> {
+    const capture = prepareWorkCapture(input, now)
+    await this.repository.createCapturedAction(capture)
+    return this.planToday(userId, now)
   }
 
   async startAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {

@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import type { Action, PlanItem, PriorityAction } from '../domain'
+import type { Action, CaptureDueTiming, CaptureImportance, PlanItem, PriorityAction, WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
@@ -23,9 +23,101 @@ type PriorityCardProps = {
   onSkip: (actionId: string) => void
 }
 
+type WorkCaptureCardProps = {
+  title: string
+  dueTiming: CaptureDueTiming
+  importance: CaptureImportance
+  submitting: boolean
+  onChangeTitle: (title: string) => void
+  onChangeDueTiming: (dueTiming: CaptureDueTiming) => void
+  onChangeImportance: (importance: CaptureImportance) => void
+  onSubmit: () => void
+  onCancel: () => void
+}
+
+const dueTimingOptions: Array<{ label: string; value: CaptureDueTiming }> = [
+  { label: 'Today', value: 'today' },
+  { label: 'Tomorrow', value: 'tomorrow' },
+  { label: 'Later', value: 'later' },
+  { label: 'No deadline', value: 'none' },
+]
+
+const importanceOptions: Array<{ label: string; value: CaptureImportance }> = [
+  { label: 'Low', value: 'low' },
+  { label: 'Normal', value: 'normal' },
+  { label: 'High', value: 'high' },
+]
+
 function greetingForNow(): string {
   const hour = new Date().getHours()
   return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+}
+
+function WorkCaptureCard({
+  title, dueTiming, importance, submitting, onChangeTitle, onChangeDueTiming, onChangeImportance, onSubmit, onCancel,
+}: WorkCaptureCardProps) {
+  const canSubmit = title.trim().length > 0 && !submitting
+
+  return (
+    <View style={{ marginHorizontal: 20, marginBottom: 12, backgroundColor: C.surface, borderRadius: 16, padding: 14, gap: 12 }}>
+      <TextInput
+        autoFocus
+        value={title}
+        onChangeText={onChangeTitle}
+        onSubmitEditing={onSubmit}
+        placeholder="What do you need to get done?"
+        placeholderTextColor={C.t3}
+        returnKeyType="done"
+        style={{ color: C.t1, fontSize: 16, lineHeight: 20, padding: 0 }}
+      />
+      <View style={{ gap: 6 }}>
+        <Text style={[T.caption1, { fontWeight: '700' }]}>DUE</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+          {dueTimingOptions.map((option) => {
+            const selected = dueTiming === option.value
+            return (
+              <TouchableOpacity
+                key={option.value}
+                onPress={() => onChangeDueTiming(option.value)}
+                style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 7 }}
+              >
+                <Text style={{ color: selected ? C.accent : C.t2, fontSize: 11, fontWeight: '700' }}>{option.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+      </View>
+      <View style={{ gap: 6 }}>
+        <Text style={[T.caption1, { fontWeight: '700' }]}>IMPORTANCE</Text>
+        <View style={{ flexDirection: 'row', gap: 6 }}>
+          {importanceOptions.map((option) => {
+            const selected = importance === option.value
+            return (
+              <TouchableOpacity
+                key={option.value}
+                onPress={() => onChangeImportance(option.value)}
+                style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 11, paddingVertical: 7 }}
+              >
+                <Text style={{ color: selected ? C.accent : C.t2, fontSize: 11, fontWeight: '700' }}>{option.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity
+          disabled={!canSubmit}
+          onPress={onSubmit}
+          style={{ flex: 1, height: 42, backgroundColor: canSubmit ? C.accent : C.surface2, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{submitting ? 'Adding...' : 'Add to Today'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onCancel} disabled={submitting} style={{ height: 42, paddingHorizontal: 14, backgroundColor: C.surface2, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: C.t2, fontSize: 12, fontWeight: '700' }}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  )
 }
 
 function PriorityCard({ priority, planItem, position, pending, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
@@ -101,16 +193,22 @@ function PriorityCard({ priority, planItem, position, pending, onStart, onComple
 
 export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabProps) {
   const [showDeferred, setShowDeferred] = useState(false)
+  const [showCapture, setShowCapture] = useState(false)
+  const [captureTitle, setCaptureTitle] = useState('')
+  const [captureDueTiming, setCaptureDueTiming] = useState<CaptureDueTiming>('none')
+  const [captureImportance, setCaptureImportance] = useState<CaptureImportance>('normal')
   const {
     state,
     loading,
     pendingActionId,
+    capturing,
     error,
     startAction,
     completeAction,
     deferAction,
     skipPlanItem,
     reconsiderDeferredAction,
+    captureAction,
   } = useTodayPlan(userId)
 
   const deferredItems = state?.planItems
@@ -120,6 +218,28 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     ?? []
   const completedCount = state?.planItems.filter((item) => item.status === 'completed').length ?? 0
   const rankColor = RANK_COLORS[rank] ?? C.accent
+
+  async function submitCapture() {
+    const created = await captureAction({
+      title: captureTitle,
+      dueTiming: captureDueTiming,
+      importance: captureImportance,
+    } satisfies WorkCaptureInput)
+    if (!created) return
+
+    setCaptureTitle('')
+    setCaptureDueTiming('none')
+    setCaptureImportance('normal')
+    setShowCapture(false)
+  }
+
+  function closeCapture() {
+    if (capturing) return
+    setCaptureTitle('')
+    setCaptureDueTiming('none')
+    setCaptureImportance('normal')
+    setShowCapture(false)
+  }
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
@@ -134,10 +254,31 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           </View>
         </View>
         <View style={{ marginTop: 18, gap: 3 }}>
-          <Text style={{ color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.3 }}>TODAY</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={{ color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.3 }}>TODAY</Text>
+            {!showCapture && (
+              <TouchableOpacity onPress={() => setShowCapture(true)} style={{ backgroundColor: C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
+                <Text style={{ color: C.accent, fontSize: 12, fontWeight: '800' }}>+ Add</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <Text style={[T.headline, { fontSize: 17, lineHeight: 21 }]}>{"Here's what matters right now."}</Text>
         </View>
       </View>
+
+      {showCapture && (
+        <WorkCaptureCard
+          title={captureTitle}
+          dueTiming={captureDueTiming}
+          importance={captureImportance}
+          submitting={capturing}
+          onChangeTitle={setCaptureTitle}
+          onChangeDueTiming={setCaptureDueTiming}
+          onChangeImportance={setCaptureImportance}
+          onSubmit={() => void submitCapture()}
+          onCancel={closeCapture}
+        />
+      )}
 
       {loading && (
         <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
