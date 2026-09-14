@@ -150,6 +150,12 @@ export interface PriorityAction {
   rationale: string
 }
 
+export type TodayEmptyState =
+  | 'no_pending_work'
+  | 'no_work_fits_current_time'
+  | 'pending_work_unavailable'
+  | null
+
 export interface TodayPlanState {
   plan: DailyPlan | null
   planItems: PlanItem[]
@@ -162,4 +168,5 @@ export interface TodayPlanState {
   priorities: PriorityAction[]
   actions: Action[]
   planningContext: PlanningContext
+  emptyState: TodayEmptyState
 }

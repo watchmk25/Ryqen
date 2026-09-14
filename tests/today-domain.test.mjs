@@ -3,7 +3,7 @@ import test from 'node:test'
 import { canTransitionAction } from '../src/domain/actionTransitions.ts'
 import { formatElapsedTime } from '../src/domain/actionElapsed.ts'
 import { formatDueTiming, formatEstimatedEffort } from '../src/domain/actionTiming.ts'
-import { derivePlanningContext, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
+import { derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
 import { dueAtForCapture, estimatedMinutesForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
 
 const now = new Date('2026-09-12T09:00:00Z')
@@ -210,4 +210,72 @@ test('uses standalone effort when a smaller time window is available', () => {
   }
 
   assert.deepEqual(selectTodayPriorities(data, derivePlanningContext(contexts, now), [], now).map((item) => item.action.id), ['quick'])
+})
+
+test('classifies genuinely empty Today work without counting deferred actions', () => {
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [],
+    actions: [action('deferred', { status: 'deferred' }), action('completed', { status: 'completed' })],
+  }
+
+  assert.equal(deriveTodayEmptyState(data, derivePlanningContext([], now), {}, now), 'no_pending_work')
+})
+
+test('classifies actionable pending work that cannot fit the current time window', () => {
+  const zeroTimeContexts = [{
+    id: 'zero-time', userId, key: 'available_time', value: 0, source: 'user', expiresAt: null, createdAt: '', updatedAt: '',
+  }]
+  const limitedTimeContexts = [{
+    id: 'limited-time', userId, key: 'available_time', value: 10, source: 'user', expiresAt: null, createdAt: '', updatedAt: '',
+  }]
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [], actions: [action('long', { estimatedMinutes: 15 })],
+  }
+
+  assert.equal(
+    deriveTodayEmptyState(data, derivePlanningContext(zeroTimeContexts, now), {}, now),
+    'no_work_fits_current_time',
+  )
+  assert.equal(
+    deriveTodayEmptyState(data, derivePlanningContext(limitedTimeContexts, now), {}, now),
+    'no_work_fits_current_time',
+  )
+})
+
+test('classifies blocked or non-actionable pending work as unavailable', () => {
+  const blockedData = {
+    contexts: [], goals: [], projects: [], tasks: [], actions: [action('blocked')],
+  }
+  const blockedContext = {
+    ...derivePlanningContext([], now),
+    blockedActionIds: ['blocked'],
+  }
+  const parentData = {
+    contexts: [], goals: [], projects: [], tasks: [task('blocked-task', { status: 'blocked' })],
+    actions: [action('blocked-parent', { taskId: 'blocked-task' })],
+  }
+
+  assert.equal(deriveTodayEmptyState(blockedData, blockedContext, {}, now), 'pending_work_unavailable')
+  assert.equal(deriveTodayEmptyState(parentData, derivePlanningContext([], now), {}, now), 'pending_work_unavailable')
+})
+
+test('does not treat skipped pending work as immediately actionable', () => {
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [], actions: [action('skipped')],
+  }
+
+  assert.equal(
+    deriveTodayEmptyState(data, derivePlanningContext([], now), { excludedActionIds: ['skipped'] }, now),
+    'no_pending_work',
+  )
+})
+
+test('suppresses the empty-state classification for active work and recommendations', () => {
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [], actions: [action('available')],
+  }
+  const context = derivePlanningContext([], now)
+
+  assert.equal(deriveTodayEmptyState(data, context, { hasActiveWork: true }, now), null)
+  assert.equal(deriveTodayEmptyState(data, context, {}, now), null)
 })

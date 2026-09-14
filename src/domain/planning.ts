@@ -1,4 +1,4 @@
-import type { Action, Context, Goal, JsonValue, PlanningContext, PlanningData, PriorityAction, Project, Task } from './ryqen'
+import type { Action, Context, Goal, JsonValue, PlanningContext, PlanningData, PriorityAction, Project, Task, TodayEmptyState } from './ryqen'
 
 const DEFAULT_ESTIMATED_MINUTES = 30
 const MAX_PRIORITY_ACTIONS = 3
@@ -208,6 +208,46 @@ export function selectTodayPriorities(data: PlanningData, planningContext: Plann
     if (remainingMinutes !== null) remainingMinutes -= candidate.estimatedMinutes
   }
   return selected
+}
+
+/**
+ * Explains a Today screen with no active work or fresh recommendations without
+ * persisting a plan solely for that explanation. It reuses the planner's
+ * eligibility and time-window semantics rather than reproducing them in UI.
+ */
+export function deriveTodayEmptyState(
+  data: PlanningData,
+  planningContext: PlanningContext,
+  options: { excludedActionIds?: string[]; hasActiveWork?: boolean } = {},
+  now = new Date(),
+): TodayEmptyState {
+  if (options.hasActiveWork) return null
+
+  const excludedActionIds = options.excludedActionIds ?? []
+  const pendingActions = data.actions.filter(
+    (action) => action.status === 'pending' && !excludedActionIds.includes(action.id),
+  )
+
+  if (pendingActions.length === 0) return 'no_pending_work'
+
+  const eligiblePriorities = pendingActions
+    .map((action) => calculatePriority(action, data, planningContext, now))
+    .filter((priority): priority is PriorityAction => priority !== null)
+
+  if (eligiblePriorities.length === 0) return 'pending_work_unavailable'
+
+  if (selectTodayPriorities(data, planningContext, excludedActionIds, now).length > 0) return null
+
+  const availableTimeMinutes = planningContext.availableTimeMinutes
+  if (
+    availableTimeMinutes === 0
+    || (availableTimeMinutes !== null
+      && eligiblePriorities.every((priority) => priority.estimatedMinutes > availableTimeMinutes))
+  ) {
+    return 'no_work_fits_current_time'
+  }
+
+  return 'pending_work_unavailable'
 }
 
 export function createContextSnapshot(contexts: Context[], planningContext: PlanningContext, now = new Date()): JsonValue {

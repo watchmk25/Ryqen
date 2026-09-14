@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import { DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type WorkCaptureInput } from '../domain'
+import { DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayEmptyState, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
@@ -38,6 +38,18 @@ type WorkCaptureCardProps = {
   onChangeCustomEstimatedMinutes: (minutes: string) => void
   onSubmit: () => void
   onCancel: () => void
+}
+
+function emptyStateTitle(emptyState: TodayEmptyState): string {
+  switch (emptyState) {
+    case 'no_work_fits_current_time':
+      return 'You have work waiting, but nothing fits your current time window.'
+    case 'pending_work_unavailable':
+      return 'Work is waiting, but nothing is actionable in your current plan.'
+    case 'no_pending_work':
+    default:
+      return 'Nothing needs your attention right now.'
+  }
 }
 
 const dueTimingOptions: Array<{ label: string; value: CaptureDueTiming }> = [
@@ -436,7 +448,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
 
       {!loading && state && state.priorities.length === 0 && state.activeWork.length === 0 && (
         <View style={{ marginHorizontal: 20, backgroundColor: C.surface, borderRadius: 18, padding: 20, gap: 6 }}>
-          <Text style={T.title3}>{state.plan ? "You're clear for now." : 'Nothing needs your attention right now.'}</Text>
+          <Text style={T.title3}>{emptyStateTitle(state.emptyState)}</Text>
           <Text style={T.footnote}>
             {completedCount > 0
               ? `${completedCount} action${completedCount === 1 ? '' : 's'} completed today. It is okay to stop here.`

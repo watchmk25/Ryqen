@@ -1,4 +1,4 @@
-import { createContextSnapshot, derivePlanningContext, selectTodayPriorities } from '../domain/planning'
+import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities } from '../domain/planning'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
 import type { PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
@@ -60,7 +60,15 @@ export class TodayService {
 
     if (!plan) {
       if (priorities.length === 0) {
-        return { plan: null, planItems: [], activeWork: [], priorities: [], actions: data.actions, planningContext }
+        return {
+          plan: null,
+          planItems: [],
+          activeWork: [],
+          priorities: [],
+          actions: data.actions,
+          planningContext,
+          emptyState: deriveTodayEmptyState(data, planningContext, { excludedActionIds: activeActionIds }, now),
+        }
       }
       try {
         plan = await this.repository.createDailyPlan({
@@ -88,6 +96,12 @@ export class TodayService {
       data,
       planningContext,
       [...excludedActionIds, ...activeActionIds],
+      now,
+    )
+    const emptyState = deriveTodayEmptyState(
+      data,
+      planningContext,
+      { excludedActionIds: [...excludedActionIds, ...activeActionIds], hasActiveWork: activeWork.length > 0 },
       now,
     )
     const existingByAction = new Map(existingPlanItems.map((item) => [item.actionId, item]))
@@ -126,6 +140,7 @@ export class TodayService {
       priorities: currentPriorities,
       actions: data.actions,
       planningContext,
+      emptyState,
     }
   }
 
