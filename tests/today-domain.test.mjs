@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { canTransitionAction } from '../src/domain/actionTransitions.ts'
+import { formatElapsedTime } from '../src/domain/actionElapsed.ts'
 import { derivePlanningContext, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
-import { dueAtForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
+import { dueAtForCapture, estimatedMinutesForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
 
 const now = new Date('2026-09-12T09:00:00Z')
 const userId = 'user-1'
@@ -20,6 +21,7 @@ function action(id, overrides = {}) {
     importance: 3,
     estimatedMinutes: 20,
     dueAt: null,
+    startedAt: null,
     createdAt: '2026-09-01T00:00:00Z',
     updatedAt: '2026-09-01T00:00:00Z',
     ...overrides,
@@ -120,6 +122,12 @@ test('enforces the approved action lifecycle', () => {
   assert.equal(canTransitionAction('completed', 'in_progress'), false)
 })
 
+test('formats foreground elapsed time from a persisted start timestamp', () => {
+  const startedAt = '2026-09-12T09:00:00Z'
+  assert.equal(formatElapsedTime(startedAt, new Date('2026-09-12T09:00:05Z')), '00:05')
+  assert.equal(formatElapsedTime(startedAt, new Date('2026-09-12T10:01:01Z')), '1:01:01')
+})
+
 test('maps capture importance and due timing deterministically', () => {
   const captureNow = new Date('2026-09-12T09:00:00Z')
   const today = dueAtForCapture('today', captureNow)
@@ -135,12 +143,24 @@ test('maps capture importance and due timing deterministically', () => {
 })
 
 test('validates and trims captured work titles', () => {
-  assert.deepEqual(prepareWorkCapture({ title: '  Send the draft  ', dueTiming: 'none', importance: 'high' }, now), {
+  assert.deepEqual(prepareWorkCapture({ title: '  Send the draft  ', dueTiming: 'none', importance: 'high', effort: '30' }, now), {
     title: 'Send the draft',
     dueAt: null,
     importance: 5,
+    estimatedMinutes: 30,
   })
-  assert.throws(() => prepareWorkCapture({ title: '   ', dueTiming: 'today', importance: 'normal' }, now), /title is required/)
+  assert.throws(() => prepareWorkCapture({ title: '   ', dueTiming: 'today', importance: 'normal', effort: '30' }, now), /title is required/)
+})
+
+test('maps capture effort selections and validates custom duration', () => {
+  assert.equal(estimatedMinutesForCapture('5'), 5)
+  assert.equal(estimatedMinutesForCapture('15'), 15)
+  assert.equal(estimatedMinutesForCapture('30'), 30)
+  assert.equal(estimatedMinutesForCapture('60'), 60)
+  assert.equal(estimatedMinutesForCapture('custom', 42), 42)
+  assert.throws(() => estimatedMinutesForCapture('custom', 0), /Estimated duration/)
+  assert.throws(() => estimatedMinutesForCapture('custom', 481), /Estimated duration/)
+  assert.throws(() => estimatedMinutesForCapture('custom', 7.5), /Estimated duration/)
 })
 
 test('uses standalone action importance in deterministic prioritization', () => {
@@ -160,4 +180,16 @@ test('preserves parent-derived importance for linked actions', () => {
   }
 
   assert.equal(selectTodayPriorities(data, derivePlanningContext([], now), [], now)[0].action.id, 'linked')
+})
+
+test('uses standalone effort when a smaller time window is available', () => {
+  const contexts = [{
+    id: 'time', userId, key: 'available_time', value: 15, source: 'user', expiresAt: null, createdAt: '', updatedAt: '',
+  }]
+  const data = {
+    contexts, goals: [], projects: [], tasks: [],
+    actions: [action('hour', { estimatedMinutes: 60 }), action('quick', { estimatedMinutes: 5 })],
+  }
+
+  assert.deepEqual(selectTodayPriorities(data, derivePlanningContext(contexts, now), [], now).map((item) => item.action.id), ['quick'])
 })

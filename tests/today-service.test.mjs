@@ -8,7 +8,7 @@ const userId = 'user-1'
 function createAction(id, overrides = {}) {
   return {
     id, userId, taskId: null, projectId: null, goalId: null, title: id, description: null,
-    status: 'pending', importance: 3, estimatedMinutes: 15, dueAt: null,
+    status: 'pending', importance: 3, estimatedMinutes: 15, dueAt: null, startedAt: null,
     createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', ...overrides,
   }
 }
@@ -60,6 +60,7 @@ class MemoryRyqenRepository {
       title: input.title,
       importance: input.importance,
       dueAt: input.dueAt,
+      estimatedMinutes: input.estimatedMinutes,
     })
     this.data.actions.push(action)
     return this.clone(action)
@@ -71,7 +72,10 @@ class MemoryRyqenRepository {
     if (!plan || !action || !planItem || !expectedActionStatuses.includes(action.status) || !expectedPlanItemStatuses.includes(planItem.status)) {
       throw new Error('Invalid atomic Today action operation')
     }
-    if (actionStatus) action.status = actionStatus
+    if (actionStatus) {
+      action.status = actionStatus
+      if (actionStatus === 'in_progress') action.startedAt = new Date(now.getTime() + this.sequence * 1000).toISOString()
+    }
     if (planItemStatus) planItem.status = planItemStatus
     for (const type of activityTypes) {
       this.activities.push({
@@ -122,11 +126,14 @@ test('start, complete, defer, and explicit reconsideration preserve valid action
   await service.planToday(userId, now)
   await service.startAction(userId, 'action-1', now)
   await service.completeAction(userId, 'action-1', now)
+  const completedStartedAt = repository.data.actions.find((action) => action.id === 'action-1').startedAt
+  assert.ok(completedStartedAt)
   await service.deferAction(userId, 'action-2', now)
   assert.equal(repository.data.actions.find((action) => action.id === 'action-2').status, 'deferred')
 
   await service.reconsiderDeferredAction(userId, 'action-2', now)
   assert.equal(repository.data.actions.find((action) => action.id === 'action-2').status, 'pending')
+  assert.equal(repository.data.actions.find((action) => action.id === 'action-1').startedAt, completedStartedAt)
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
     'action_started', 'plan_item_started', 'action_completed', 'plan_item_completed', 'action_deferred',
   ])
@@ -137,10 +144,28 @@ test('rejects a retry without duplicating atomic start activities', async () => 
   const service = new TodayService(repository)
 
   await service.startAction(userId, 'action-1', now)
+  const startedAt = repository.data.actions[0].startedAt
   await assert.rejects(() => service.startAction(userId, 'action-1', now), /Invalid atomic Today action operation/)
 
   assert.equal(repository.data.actions[0].status, 'in_progress')
+  assert.ok(startedAt)
+  assert.equal(repository.data.actions[0].startedAt, startedAt)
   assert.deepEqual(repository.activities.map((activity) => activity.type), ['action_started', 'plan_item_started'])
+})
+
+test('records a new start timestamp when a deferred action is started again', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  const firstStartedAt = repository.data.actions[0].startedAt
+  await service.deferAction(userId, 'action-1', now)
+  assert.equal(repository.data.actions[0].startedAt, firstStartedAt)
+  await service.reconsiderDeferredAction(userId, 'action-1', now)
+  await service.startAction(userId, 'action-1', now)
+
+  assert.notEqual(repository.data.actions[0].startedAt, firstStartedAt)
+  assert.equal(repository.data.actions[0].status, 'in_progress')
 })
 
 test('rejects Skip for an in-progress action and plan item', async () => {
@@ -213,7 +238,7 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   const service = new TodayService(repository)
 
   const state = await service.captureAction(userId, {
-    title: '  Send the draft  ', dueTiming: 'today', importance: 'high',
+    title: '  Send the draft  ', dueTiming: 'today', importance: 'high', effort: '60',
   }, now)
 
   const action = repository.data.actions[0]
@@ -224,6 +249,7 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   assert.equal(action.title, 'Send the draft')
   assert.equal(action.status, 'pending')
   assert.equal(action.importance, 5)
+  assert.equal(action.estimatedMinutes, 60)
   assert.equal(state.priorities[0].action.id, action.id)
   assert.equal(repository.plans.length, 1)
   assert.equal(repository.activities.length, 0)
@@ -235,8 +261,21 @@ test('rejects invalid captured titles before repository persistence', async () =
   const service = new TodayService(repository)
 
   await assert.rejects(() => service.captureAction(userId, {
-    title: ' ', dueTiming: 'none', importance: 'normal',
+    title: ' ', dueTiming: 'none', importance: 'normal', effort: '30',
   }, now), /title is required/)
+
+  assert.equal(repository.captureInputs.length, 0)
+  assert.equal(repository.data.actions.length, 0)
+  assert.equal(repository.activities.length, 0)
+})
+
+test('rejects an invalid captured duration before repository persistence', async () => {
+  const repository = new MemoryRyqenRepository([])
+  const service = new TodayService(repository)
+
+  await assert.rejects(() => service.captureAction(userId, {
+    title: 'Estimate this', dueTiming: 'none', importance: 'normal', effort: 'custom', customEstimatedMinutes: 0,
+  }, now), /Estimated duration/)
 
   assert.equal(repository.captureInputs.length, 0)
   assert.equal(repository.data.actions.length, 0)

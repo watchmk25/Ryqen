@@ -83,6 +83,7 @@ export interface Action {
   importance: number
   estimatedMinutes: number | null
   dueAt: string | null
+  startedAt: string | null
   createdAt: string
   updatedAt: string
 }

@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import type { Action, CaptureDueTiming, CaptureImportance, PlanItem, PriorityAction, WorkCaptureInput } from '../domain'
+import { DEFAULT_CAPTURE_EFFORT, formatElapsedTime, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
@@ -27,10 +27,14 @@ type WorkCaptureCardProps = {
   title: string
   dueTiming: CaptureDueTiming
   importance: CaptureImportance
+  effort: CaptureEffort
+  customEstimatedMinutes: string
   submitting: boolean
   onChangeTitle: (title: string) => void
   onChangeDueTiming: (dueTiming: CaptureDueTiming) => void
   onChangeImportance: (importance: CaptureImportance) => void
+  onChangeEffort: (effort: CaptureEffort) => void
+  onChangeCustomEstimatedMinutes: (minutes: string) => void
   onSubmit: () => void
   onCancel: () => void
 }
@@ -48,15 +52,43 @@ const importanceOptions: Array<{ label: string; value: CaptureImportance }> = [
   { label: 'High', value: 'high' },
 ]
 
+const effortOptions: Array<{ label: string; value: CaptureEffort }> = [
+  { label: '5 min', value: '5' },
+  { label: '15 min', value: '15' },
+  { label: '30 min', value: '30' },
+  { label: '1 hr', value: '60' },
+  { label: 'Custom', value: 'custom' },
+]
+
 function greetingForNow(): string {
   const hour = new Date().getHours()
   return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 }
 
+function formatEstimatedDuration(minutes: number): string {
+  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} hr` : `${minutes} min`
+}
+
+function ElapsedTime({ startedAt }: { startedAt: string }) {
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    setNow(new Date())
+    const intervalId = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(intervalId)
+  }, [startedAt])
+
+  return <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatElapsedTime(startedAt, now)}</Text>
+}
+
 function WorkCaptureCard({
-  title, dueTiming, importance, submitting, onChangeTitle, onChangeDueTiming, onChangeImportance, onSubmit, onCancel,
+  title, dueTiming, importance, effort, customEstimatedMinutes, submitting,
+  onChangeTitle, onChangeDueTiming, onChangeImportance, onChangeEffort, onChangeCustomEstimatedMinutes, onSubmit, onCancel,
 }: WorkCaptureCardProps) {
-  const canSubmit = title.trim().length > 0 && !submitting
+  const customMinutes = Number(customEstimatedMinutes)
+  const customEffortIsValid = effort !== 'custom'
+    || (Number.isInteger(customMinutes) && customMinutes >= 1 && customMinutes <= MAX_CAPTURE_ESTIMATED_MINUTES)
+  const canSubmit = title.trim().length > 0 && customEffortIsValid && !submitting
 
   return (
     <View style={{ marginHorizontal: 20, marginBottom: 12, backgroundColor: C.surface, borderRadius: 16, padding: 14, gap: 12 }}>
@@ -64,7 +96,7 @@ function WorkCaptureCard({
         autoFocus
         value={title}
         onChangeText={onChangeTitle}
-        onSubmitEditing={onSubmit}
+        onSubmitEditing={() => { if (canSubmit) onSubmit() }}
         placeholder="What do you need to get done?"
         placeholderTextColor={C.t3}
         returnKeyType="done"
@@ -103,6 +135,35 @@ function WorkCaptureCard({
             )
           })}
         </View>
+      </View>
+      <View style={{ gap: 6 }}>
+        <Text style={[T.caption1, { fontWeight: '700' }]}>EFFORT</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+          {effortOptions.map((option) => {
+            const selected = effort === option.value
+            return (
+              <TouchableOpacity
+                key={option.value}
+                onPress={() => onChangeEffort(option.value)}
+                style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 7 }}
+              >
+                <Text style={{ color: selected ? C.accent : C.t2, fontSize: 11, fontWeight: '700' }}>{option.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+        {effort === 'custom' && (
+          <TextInput
+            autoFocus
+            value={customEstimatedMinutes}
+            onChangeText={onChangeCustomEstimatedMinutes}
+            keyboardType="number-pad"
+            placeholder={`Minutes (1–${MAX_CAPTURE_ESTIMATED_MINUTES})`}
+            placeholderTextColor={C.t3}
+            maxLength={3}
+            style={{ color: C.t1, fontSize: 14, lineHeight: 18, backgroundColor: C.surface2, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 9 }}
+          />
+        )}
       </View>
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <TouchableOpacity
@@ -150,9 +211,14 @@ function PriorityCard({ priority, planItem, position, pending, onStart, onComple
           <Text numberOfLines={isLead ? 2 : 1} style={{ color: C.t1, fontSize: isLead ? 20 : 16, fontWeight: isLead ? '700' : '600', lineHeight: isLead ? 24 : 20 }}>
             {priority.action.title}
           </Text>
-          <Text style={{ color: C.t2, fontSize: 12, lineHeight: 15 }}>{priority.estimatedMinutes} min</Text>
+          <Text style={{ color: C.t2, fontSize: 12, lineHeight: 15 }}>{formatEstimatedDuration(priority.estimatedMinutes)}</Text>
         </View>
-        {isInProgress && <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>IN PROGRESS</Text>}
+        {isInProgress && (
+          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+            <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>IN PROGRESS</Text>
+            {priority.action.startedAt && <ElapsedTime startedAt={priority.action.startedAt} />}
+          </View>
+        )}
       </View>
 
       <View style={{ borderLeftWidth: 2, borderLeftColor: isLead ? C.accent : C.sep, paddingLeft: 8 }}>
@@ -197,6 +263,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const [captureTitle, setCaptureTitle] = useState('')
   const [captureDueTiming, setCaptureDueTiming] = useState<CaptureDueTiming>('none')
   const [captureImportance, setCaptureImportance] = useState<CaptureImportance>('normal')
+  const [captureEffort, setCaptureEffort] = useState<CaptureEffort>(DEFAULT_CAPTURE_EFFORT)
+  const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState('')
   const {
     state,
     loading,
@@ -224,12 +292,16 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
       title: captureTitle,
       dueTiming: captureDueTiming,
       importance: captureImportance,
+      effort: captureEffort,
+      customEstimatedMinutes: captureEffort === 'custom' ? Number(customEstimatedMinutes) : undefined,
     } satisfies WorkCaptureInput)
     if (!created) return
 
     setCaptureTitle('')
     setCaptureDueTiming('none')
     setCaptureImportance('normal')
+    setCaptureEffort(DEFAULT_CAPTURE_EFFORT)
+    setCustomEstimatedMinutes('')
     setShowCapture(false)
   }
 
@@ -238,6 +310,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     setCaptureTitle('')
     setCaptureDueTiming('none')
     setCaptureImportance('normal')
+    setCaptureEffort(DEFAULT_CAPTURE_EFFORT)
+    setCustomEstimatedMinutes('')
     setShowCapture(false)
   }
 
@@ -271,10 +345,14 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           title={captureTitle}
           dueTiming={captureDueTiming}
           importance={captureImportance}
+          effort={captureEffort}
+          customEstimatedMinutes={customEstimatedMinutes}
           submitting={capturing}
           onChangeTitle={setCaptureTitle}
           onChangeDueTiming={setCaptureDueTiming}
           onChangeImportance={setCaptureImportance}
+          onChangeEffort={setCaptureEffort}
+          onChangeCustomEstimatedMinutes={setCustomEstimatedMinutes}
           onSubmit={() => void submitCapture()}
           onCancel={closeCapture}
         />

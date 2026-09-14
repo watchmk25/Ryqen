@@ -61,6 +61,7 @@ export interface CreateCapturedActionInput {
   title: string
   importance: number
   dueAt: string | null
+  estimatedMinutes: number
 }
 
 /**
@@ -149,6 +150,7 @@ function mapAction(row: DatabaseRow): Action {
     title: requireString(row.title, 'actions.title'), description: nullableString(row.description), status: row.status as ActionStatus,
     importance: Number(row.importance),
     estimatedMinutes: nullableNumber(row.estimated_minutes), dueAt: nullableString(row.due_at),
+    startedAt: nullableString(row.started_at),
     createdAt: requireString(row.created_at, 'actions.created_at'), updatedAt: requireString(row.updated_at, 'actions.updated_at'),
   }
 }
@@ -258,6 +260,7 @@ export class SupabaseRyqenRepository implements RyqenRepository {
       p_title: input.title,
       p_importance: input.importance,
       p_due_at: input.dueAt,
+      p_estimated_minutes: input.estimatedMinutes,
     })
     return mapAction(unwrap(result.data, result.error, 'Capture action') as DatabaseRow)
   }

@@ -1,17 +1,24 @@
 export type CaptureDueTiming = 'today' | 'tomorrow' | 'later' | 'none'
 export type CaptureImportance = 'low' | 'normal' | 'high'
+export type CaptureEffort = '5' | '15' | '30' | '60' | 'custom'
 
 export interface WorkCaptureInput {
   title: string
   dueTiming: CaptureDueTiming
   importance: CaptureImportance
+  effort: CaptureEffort
+  customEstimatedMinutes?: number
 }
 
 export interface PreparedWorkCapture {
   title: string
   dueAt: string | null
   importance: number
+  estimatedMinutes: number
 }
+
+export const DEFAULT_CAPTURE_EFFORT: CaptureEffort = '30'
+export const MAX_CAPTURE_ESTIMATED_MINUTES = 480
 
 const IMPORTANCE_BY_SELECTION: Record<CaptureImportance, number> = {
   low: 1,
@@ -21,6 +28,21 @@ const IMPORTANCE_BY_SELECTION: Record<CaptureImportance, number> = {
 
 export function importanceForCapture(selection: CaptureImportance): number {
   return IMPORTANCE_BY_SELECTION[selection]
+}
+
+const ESTIMATED_MINUTES_BY_EFFORT: Record<Exclude<CaptureEffort, 'custom'>, number> = {
+  '5': 5,
+  '15': 15,
+  '30': 30,
+  '60': 60,
+}
+
+export function estimatedMinutesForCapture(effort: CaptureEffort, customEstimatedMinutes?: number): number {
+  const estimatedMinutes = effort === 'custom' ? customEstimatedMinutes : ESTIMATED_MINUTES_BY_EFFORT[effort]
+  if (!Number.isInteger(estimatedMinutes) || estimatedMinutes === undefined || estimatedMinutes < 1 || estimatedMinutes > MAX_CAPTURE_ESTIMATED_MINUTES) {
+    throw new Error(`Estimated duration must be a whole number from 1 to ${MAX_CAPTURE_ESTIMATED_MINUTES} minutes.`)
+  }
+  return estimatedMinutes
 }
 
 function endOfLocalDay(date: Date): Date {
@@ -45,5 +67,6 @@ export function prepareWorkCapture(input: WorkCaptureInput, now = new Date()): P
     title,
     dueAt: dueAtForCapture(input.dueTiming, now),
     importance: importanceForCapture(input.importance),
+    estimatedMinutes: estimatedMinutesForCapture(input.effort, input.customEstimatedMinutes),
   }
 }

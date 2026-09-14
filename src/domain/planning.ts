@@ -82,6 +82,12 @@ function capacityAdjustment(capacity: PlanningContext['capacity'], minutes: numb
   return 0
 }
 
+function effortAdjustment(minutes: number): number {
+  if (minutes <= 15) return 4
+  if (minutes >= 60) return -4
+  return 0
+}
+
 function dueDateAdjustment(dueAt: string | null, now: Date): { score: number; reason: string | null } {
   if (!dueAt) return { score: 0, reason: null }
   const days = daysUntil(dueAt, now)
@@ -108,6 +114,7 @@ function buildRationale(input: {
     reasons.push(`Fits your ${input.planningContext.availableTimeMinutes}-minute window`)
   }
   if (input.planningContext.capacity === 'low' && input.minutes <= 15) reasons.push('Light enough for low capacity')
+  if (input.minutes <= 15) reasons.push('Quick to complete')
   if (input.preferred) reasons.push('Matches a stated preference')
   return reasons.slice(0, 3).join(' · ') || 'A practical next step for today'
 }
@@ -167,6 +174,7 @@ export function calculatePriority(action: Action, data: PlanningData, planningCo
   if (goal) score += goal.importance * 4
   if (project) score += project.importance * 2
   score += capacityAdjustment(planningContext.capacity, minutes)
+  score += effortAdjustment(minutes)
   if (planningContext.availableTimeMinutes !== null) score += minutes <= planningContext.availableTimeMinutes ? 8 : -20
   if (planningContext.preferShortActions && minutes <= 30) score += 6
   if (preferred) score += 8
