@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
 import type { TodayPlanState, WorkCaptureInput } from '../domain'
+import { acknowledgementForTodayAction, type TodayAcknowledgement } from './todayAcknowledgement'
 import { transitionTodayError, type TodayCommandError, type TodayMutationOperation } from './todayErrorState'
 
 type TodayOperation = Exclude<TodayMutationOperation, 'capture'>
@@ -13,6 +14,7 @@ export function useTodayPlan(userId: string | undefined) {
   const [pendingActionId, setPendingActionId] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [error, setError] = useState<TodayCommandError | null>(null)
+  const [acknowledgement, setAcknowledgement] = useState<TodayAcknowledgement | null>(null)
 
   const applyError = useCallback((event: Parameters<typeof transitionTodayError>[1]) => {
     setError((current) => transitionTodayError(current, event))
@@ -22,11 +24,13 @@ export function useTodayPlan(userId: string | undefined) {
     if (!userId) {
       setState(null)
       setLoading(false)
+      setAcknowledgement(null)
       applyError({ type: 'clear' })
       return
     }
 
     setLoading(true)
+    if (!preserveError) setAcknowledgement(null)
     if (!preserveError) applyError({ type: 'clear' })
     try {
       setState(await service.planToday(userId))
@@ -46,6 +50,7 @@ export function useTodayPlan(userId: string | undefined) {
     if (!userId) return
 
     setPendingActionId(actionId)
+    setAcknowledgement(null)
     applyError({ type: 'clear' })
     try {
       const nextState = operation === 'start'
@@ -58,6 +63,9 @@ export function useTodayPlan(userId: string | undefined) {
               ? await service.skipPlanItem(userId, actionId)
               : await service.reconsiderDeferredAction(userId, actionId)
       setState(nextState)
+      setAcknowledgement(operation === 'reconsider'
+        ? acknowledgementForTodayAction(nextState, actionId, 'reconsidered')
+        : null)
       applyError({ type: 'mutation_succeeded' })
     } catch {
       applyError({ type: 'mutation_failed', operation })
@@ -71,9 +79,12 @@ export function useTodayPlan(userId: string | undefined) {
     if (!userId) return false
 
     setCapturing(true)
+    setAcknowledgement(null)
     applyError({ type: 'clear' })
     try {
-      setState(await service.captureAction(userId, input))
+      const result = await service.captureAction(userId, input)
+      setState(result.state)
+      setAcknowledgement(acknowledgementForTodayAction(result.state, result.capturedActionId, 'captured'))
       applyError({ type: 'mutation_succeeded' })
       return true
     } catch {
@@ -91,6 +102,7 @@ export function useTodayPlan(userId: string | undefined) {
     pendingActionId,
     capturing,
     error,
+    acknowledgement,
     reload,
     startAction: (actionId: string) => perform('start', actionId),
     completeAction: (actionId: string) => perform('complete', actionId),

@@ -275,6 +275,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     pendingActionId,
     capturing,
     error,
+    acknowledgement,
     reload,
     startAction,
     completeAction,
@@ -382,6 +383,16 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           >
             <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>Retry</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {!loading && acknowledgement && (
+        <View style={{ marginHorizontal: 20, marginBottom: 14, backgroundColor: C.accentDim, borderRadius: 14, padding: 12, gap: 3 }}>
+          <Text style={{ color: C.accent, fontSize: 10, fontWeight: '800', letterSpacing: 0.8 }}>
+            {acknowledgement.kind === 'captured' ? 'ADDED' : 'RECONSIDERED'}
+          </Text>
+          <Text numberOfLines={1} style={[T.subhead, { color: C.t1 }]}>{acknowledgement.title}</Text>
+          <Text style={T.caption1}>{acknowledgement.message}</Text>
         </View>
       )}
 

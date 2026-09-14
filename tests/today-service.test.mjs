@@ -333,10 +333,10 @@ test('keeps active work visible through capacity changes and replanning', async 
   assert.deepEqual(state.priorities, [])
   assert.equal(repository.planItems.find((item) => item.actionId === 'action-1')?.status, 'in_progress')
 
-  const captured = await service.captureAction(userId, {
+  const captureResult = await service.captureAction(userId, {
     title: 'A newly captured action', dueTiming: 'none', importance: 'normal', effort: '15',
   }, now)
-  assert.deepEqual(captured.activeWork.map((item) => item.action.id), ['action-1'])
+  assert.deepEqual(captureResult.state.activeWork.map((item) => item.action.id), ['action-1'])
 })
 
 test('keeps active work controllable when its parent becomes paused after Start', async () => {
@@ -376,9 +376,10 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   const repository = new MemoryRyqenRepository([])
   const service = new TodayService(repository)
 
-  const state = await service.captureAction(userId, {
+  const captureResult = await service.captureAction(userId, {
     title: '  Send the draft  ', dueTiming: 'today', importance: 'high', effort: '60',
   }, now)
+  const state = captureResult.state
 
   const action = repository.data.actions[0]
   assert.equal(action.userId, userId)
@@ -389,6 +390,7 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   assert.equal(action.status, 'pending')
   assert.equal(action.importance, 5)
   assert.equal(action.estimatedMinutes, 60)
+  assert.equal(captureResult.capturedActionId, action.id)
   assert.equal(state.priorities[0].action.id, action.id)
   assert.equal(repository.plans.length, 1)
   assert.equal(repository.activities.length, 0)

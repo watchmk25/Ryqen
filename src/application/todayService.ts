@@ -3,6 +3,11 @@ import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture
 import type { PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
 
+export interface TodayCaptureResult {
+  state: TodayPlanState
+  capturedActionId: string
+}
+
 function planDateFor(now: Date): string {
   const year = now.getFullYear()
   const month = String(now.getMonth() + 1).padStart(2, '0')
@@ -124,10 +129,10 @@ export class TodayService {
     }
   }
 
-  async captureAction(userId: string, input: WorkCaptureInput, now = new Date()): Promise<TodayPlanState> {
+  async captureAction(userId: string, input: WorkCaptureInput, now = new Date()): Promise<TodayCaptureResult> {
     const capture = prepareWorkCapture(input, now)
-    await this.repository.createCapturedAction(capture)
-    return this.planToday(userId, now)
+    const action = await this.repository.createCapturedAction(capture)
+    return { state: await this.planToday(userId, now), capturedActionId: action.id }
   }
 
   async startAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
