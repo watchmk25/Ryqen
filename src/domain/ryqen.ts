@@ -153,6 +153,12 @@ export interface PriorityAction {
 export interface TodayPlanState {
   plan: DailyPlan | null
   planItems: PlanItem[]
+  /**
+   * Work already underway in the current daily plan. Active work is kept
+   * separate from fresh recommendations so replanning never hides its
+   * lifecycle controls.
+   */
+  activeWork: PriorityAction[]
   priorities: PriorityAction[]
   actions: Action[]
   planningContext: PlanningContext

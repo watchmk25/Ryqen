@@ -16,6 +16,7 @@ type PriorityCardProps = {
   priority: PriorityAction
   planItem: PlanItem | undefined
   position: number
+  variant?: 'active' | 'priority'
   pending: boolean
   onStart: (actionId: string) => void
   onComplete: (actionId: string) => void
@@ -181,8 +182,9 @@ function WorkCaptureCard({
   )
 }
 
-function PriorityCard({ priority, planItem, position, pending, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
-  const isLead = position === 1
+function PriorityCard({ priority, planItem, position, variant = 'priority', pending, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
+  const isActiveWork = variant === 'active'
+  const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
   const disabled = pending || !planItem
 
@@ -196,16 +198,18 @@ function PriorityCard({ priority, planItem, position, pending, onStart, onComple
       gap: 10,
     }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-        <View style={{
-          width: isLead ? 28 : 22,
-          height: isLead ? 28 : 22,
-          borderRadius: 14,
-          backgroundColor: isLead ? C.accent : C.surface2,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
-          <Text style={{ color: isLead ? '#fff' : C.t2, fontSize: 12, fontWeight: '800' }}>{position}</Text>
-        </View>
+        {!isActiveWork && (
+          <View style={{
+            width: isLead ? 28 : 22,
+            height: isLead ? 28 : 22,
+            borderRadius: 14,
+            backgroundColor: isLead ? C.accent : C.surface2,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Text style={{ color: isLead ? '#fff' : C.t2, fontSize: 12, fontWeight: '800' }}>{position}</Text>
+          </View>
+        )}
         <View style={{ flex: 1, gap: 2 }}>
           {isLead && <Text style={{ color: C.accent, fontSize: 10, fontWeight: '800', letterSpacing: 1 }}>PRIORITY ONE</Text>}
           <Text numberOfLines={isLead ? 2 : 1} style={{ color: C.t1, fontSize: isLead ? 20 : 16, fontWeight: isLead ? '700' : '600', lineHeight: isLead ? 24 : 20 }}>
@@ -372,6 +376,26 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         </View>
       )}
 
+      {!loading && state && state.activeWork.length > 0 && (
+        <View style={{ paddingHorizontal: 20, gap: 8, marginBottom: state.priorities.length > 0 ? 18 : 0 }}>
+          <Text style={[T.caption1, { color: C.warning, fontWeight: '800', letterSpacing: 0.8 }]}>ACTIVE WORK</Text>
+          {state.activeWork.map((priority, index) => (
+            <PriorityCard
+              key={priority.action.id}
+              priority={priority}
+              planItem={state.planItems.find((item) => item.actionId === priority.action.id)}
+              position={index + 1}
+              variant="active"
+              pending={pendingActionId === priority.action.id}
+              onStart={(actionId) => void startAction(actionId)}
+              onComplete={(actionId) => void completeAction(actionId)}
+              onDefer={(actionId) => void deferAction(actionId)}
+              onSkip={(actionId) => void skipPlanItem(actionId)}
+            />
+          ))}
+        </View>
+      )}
+
       {!loading && state && state.priorities.length > 0 && (
         <View style={{ paddingHorizontal: 20, gap: 8 }}>
           {state.priorities.slice(0, 3).map((priority, index) => (
@@ -390,7 +414,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         </View>
       )}
 
-      {!loading && state && state.priorities.length === 0 && (
+      {!loading && state && state.priorities.length === 0 && state.activeWork.length === 0 && (
         <View style={{ marginHorizontal: 20, backgroundColor: C.surface, borderRadius: 18, padding: 20, gap: 6 }}>
           <Text style={T.title3}>{state.plan ? "You're clear for now." : 'Nothing needs your attention right now.'}</Text>
           <Text style={T.footnote}>

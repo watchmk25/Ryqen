@@ -233,6 +233,145 @@ test('returns the action records needed to present deferred work after replannin
   assert.equal(state.priorities.length, 0)
 })
 
+test('keeps one active action separate from three fresh recommendations', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('action-1'), createAction('action-2'), createAction('action-3'), createAction('action-4'),
+  ])
+  const service = new TodayService(repository)
+
+  const state = await service.startAction(userId, 'action-1', now)
+
+  assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-1'])
+  assert.equal(state.priorities.length, 3)
+  assert.equal(state.priorities.some((item) => item.action.id === 'action-1'), false)
+  assert.equal(state.planItems.find((item) => item.actionId === 'action-1')?.status, 'in_progress')
+})
+
+test('keeps multiple active actions accessible without consuming fresh recommendation slots', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('action-1'), createAction('action-2'), createAction('action-3'), createAction('action-4'), createAction('action-5'),
+  ])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  const state = await service.startAction(userId, 'action-2', now)
+
+  assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-1', 'action-2'])
+  assert.equal(state.priorities.length, 3)
+  assert.equal(state.priorities.some((item) => item.action.status === 'in_progress'), false)
+})
+
+test('keeps the other active action visible after completing one active action', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('action-1'), createAction('action-2'), createAction('action-3'),
+  ])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  await service.startAction(userId, 'action-2', now)
+  const state = await service.completeAction(userId, 'action-1', now)
+
+  assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-2'])
+  assert.equal(state.actions.find((action) => action.id === 'action-1')?.status, 'completed')
+})
+
+test('keeps the other active action visible after deferring one active action', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('action-1'), createAction('action-2'), createAction('action-3'),
+  ])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  await service.startAction(userId, 'action-2', now)
+  const state = await service.deferAction(userId, 'action-1', now)
+
+  assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-2'])
+  assert.equal(state.actions.find((action) => action.id === 'action-1')?.status, 'deferred')
+})
+
+test('keeps active work visible when Skip replans another plan item', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('action-1'), createAction('action-2'), createAction('action-3'),
+  ])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  await service.startAction(userId, 'action-2', now)
+  const state = await service.skipPlanItem(userId, 'action-3', now)
+
+  assert.deepEqual(state.activeWork.map((item) => item.action.id).sort(), ['action-1', 'action-2'])
+  assert.equal(state.planItems.find((item) => item.actionId === 'action-3')?.status, 'skipped')
+})
+
+test('keeps active work visible when Reconsider replans another plan item', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('action-1'), createAction('action-2'), createAction('action-3'),
+  ])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  await service.startAction(userId, 'action-2', now)
+  await service.deferAction(userId, 'action-3', now)
+  const state = await service.reconsiderDeferredAction(userId, 'action-3', now)
+
+  assert.deepEqual(state.activeWork.map((item) => item.action.id).sort(), ['action-1', 'action-2'])
+  assert.equal(state.actions.find((action) => action.id === 'action-3')?.status, 'pending')
+})
+
+test('keeps active work visible through capacity changes and replanning', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1'), createAction('action-2')])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  repository.data.contexts = [{
+    id: 'time', userId, key: 'available_time', value: 0, source: 'user', expiresAt: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  }]
+
+  const state = await service.planToday(userId, now)
+  assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-1'])
+  assert.deepEqual(state.priorities, [])
+  assert.equal(repository.planItems.find((item) => item.actionId === 'action-1')?.status, 'in_progress')
+
+  const captured = await service.captureAction(userId, {
+    title: 'A newly captured action', dueTiming: 'none', importance: 'normal', effort: '15',
+  }, now)
+  assert.deepEqual(captured.activeWork.map((item) => item.action.id), ['action-1'])
+})
+
+test('keeps active work controllable when its parent becomes paused after Start', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1', { goalId: 'goal-1' })])
+  repository.data.goals = [{
+    id: 'goal-1', userId, title: 'Goal', description: null, status: 'active', importance: 3,
+    targetDate: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  }]
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  repository.data.goals[0].status = 'paused'
+
+  const state = await service.planToday(userId, now)
+  assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-1'])
+  assert.deepEqual(state.priorities, [])
+  await service.deferAction(userId, 'action-1', now)
+  assert.equal(repository.data.actions[0].status, 'deferred')
+})
+
+test('removes completed or deferred active work and resumes normal recommendations', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1'), createAction('action-2')])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'action-1', now)
+  const completed = await service.completeAction(userId, 'action-1', now)
+  assert.deepEqual(completed.activeWork, [])
+  assert.deepEqual(completed.priorities.map((item) => item.action.id), ['action-2'])
+
+  await service.startAction(userId, 'action-2', now)
+  const deferred = await service.deferAction(userId, 'action-2', now)
+  assert.deepEqual(deferred.activeWork, [])
+  assert.deepEqual(deferred.priorities, [])
+})
+
 test('captures a valid standalone action, refreshes Today, and creates no activity or quest', async () => {
   const repository = new MemoryRyqenRepository([])
   const service = new TodayService(repository)

@@ -1,6 +1,6 @@
 import { createContextSnapshot, derivePlanningContext, selectTodayPriorities } from '../domain/planning'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
-import type { TodayPlanState } from '../domain/ryqen'
+import type { PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
 
 function planDateFor(now: Date): string {
@@ -8,6 +8,26 @@ function planDateFor(now: Date): string {
   const month = String(now.getMonth() + 1).padStart(2, '0')
   const day = String(now.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function activeWorkFor(planItems: PlanItem[], data: PlanningData): PriorityAction[] {
+  const actionsById = new Map(data.actions.map((action) => [action.id, action]))
+
+  return planItems.flatMap((planItem) => {
+    if (planItem.status !== 'in_progress') return []
+    const action = actionsById.get(planItem.actionId)
+    if (!action || action.status !== 'in_progress') return []
+
+    return [{
+      action,
+      task: action.taskId ? data.tasks.find((task) => task.id === action.taskId) ?? null : null,
+      project: action.projectId ? data.projects.find((project) => project.id === action.projectId) ?? null : null,
+      goal: action.goalId ? data.goals.find((goal) => goal.id === action.goalId) ?? null : null,
+      estimatedMinutes: planItem.estimatedMinutes ?? action.estimatedMinutes ?? 30,
+      priorityScore: planItem.priorityScore,
+      rationale: planItem.rationale ?? 'Already in progress',
+    }]
+  })
 }
 
 /**
@@ -27,12 +47,15 @@ export class TodayService {
     const planningContext = derivePlanningContext(data.contexts, now)
     const generatedAt = now.toISOString()
     const contextSnapshot = createContextSnapshot(data.contexts, planningContext, now)
-    const priorities = selectTodayPriorities(data, planningContext, [], now)
+    const activeActionIds = data.actions
+      .filter((action) => action.status === 'in_progress')
+      .map((action) => action.id)
+    const priorities = selectTodayPriorities(data, planningContext, activeActionIds, now)
     let plan = await this.repository.findDailyPlan(userId, planDate)
 
     if (!plan) {
       if (priorities.length === 0) {
-        return { plan: null, planItems: [], priorities: [], actions: data.actions, planningContext }
+        return { plan: null, planItems: [], activeWork: [], priorities: [], actions: data.actions, planningContext }
       }
       try {
         plan = await this.repository.createDailyPlan({
@@ -55,7 +78,13 @@ export class TodayService {
     const excludedActionIds = existingPlanItems
       .filter((item) => item.status === 'skipped')
       .map((item) => item.actionId)
-    const currentPriorities = selectTodayPriorities(data, planningContext, excludedActionIds, now)
+    const activeWork = activeWorkFor(existingPlanItems, data)
+    const currentPriorities = selectTodayPriorities(
+      data,
+      planningContext,
+      [...excludedActionIds, ...activeActionIds],
+      now,
+    )
     const existingByAction = new Map(existingPlanItems.map((item) => [item.actionId, item]))
     const newItems = []
     const selectedActionIds = new Set(currentPriorities.map((priority) => priority.action.id))
@@ -88,6 +117,7 @@ export class TodayService {
     return {
       plan,
       planItems: await this.repository.listPlanItems(plan.id),
+      activeWork,
       priorities: currentPriorities,
       actions: data.actions,
       planningContext,
