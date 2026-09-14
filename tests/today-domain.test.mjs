@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { canTransitionAction } from '../src/domain/actionTransitions.ts'
 import { formatElapsedTime } from '../src/domain/actionElapsed.ts'
+import { formatDueTiming, formatEstimatedEffort } from '../src/domain/actionTiming.ts'
 import { derivePlanningContext, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
 import { dueAtForCapture, estimatedMinutesForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
 
@@ -126,6 +127,23 @@ test('formats foreground elapsed time from a persisted start timestamp', () => {
   const startedAt = '2026-09-12T09:00:00Z'
   assert.equal(formatElapsedTime(startedAt, new Date('2026-09-12T09:00:05Z')), '00:05')
   assert.equal(formatElapsedTime(startedAt, new Date('2026-09-12T10:01:01Z')), '1:01:01')
+})
+
+test('formats estimated effort and concise due timing for Today cards', () => {
+  const displayNow = new Date(2026, 8, 12, 9, 0, 0)
+
+  assert.equal(formatEstimatedEffort(1), 'Est. 1 min')
+  assert.equal(formatEstimatedEffort(15), 'Est. 15 min')
+  assert.equal(formatEstimatedEffort(60), 'Est. 1 hr')
+  assert.equal(formatEstimatedEffort(90), 'Est. 1 hr 30 min')
+  assert.equal(formatEstimatedEffort(480), 'Est. 8 hr')
+  assert.equal(formatDueTiming(null, displayNow), null)
+  assert.equal(formatDueTiming(new Date(2026, 8, 12, 8).toISOString(), displayNow), 'Overdue today')
+  assert.equal(formatDueTiming(new Date(2026, 8, 12, 18).toISOString(), displayNow), 'Due today')
+  assert.equal(formatDueTiming(new Date(2026, 8, 13, 9).toISOString(), displayNow), 'Due tomorrow')
+  assert.equal(formatDueTiming(new Date(2026, 8, 11, 9).toISOString(), displayNow), 'Overdue by 1 day')
+  assert.equal(formatDueTiming(new Date(2026, 8, 10, 9).toISOString(), displayNow), 'Overdue by 2 days')
+  assert.equal(formatDueTiming('not-a-date', displayNow), null)
 })
 
 test('maps capture importance and due timing deterministically', () => {
