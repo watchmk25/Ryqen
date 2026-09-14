@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import { DEFAULT_CAPTURE_EFFORT, formatElapsedTime, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type WorkCaptureInput } from '../domain'
+import { DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
@@ -66,10 +66,6 @@ function greetingForNow(): string {
   return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 }
 
-function formatEstimatedDuration(minutes: number): string {
-  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} hr` : `${minutes} min`
-}
-
 function ElapsedTime({ startedAt }: { startedAt: string }) {
   const [now, setNow] = useState(() => new Date())
 
@@ -79,7 +75,7 @@ function ElapsedTime({ startedAt }: { startedAt: string }) {
     return () => clearInterval(intervalId)
   }, [startedAt])
 
-  return <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatElapsedTime(startedAt, now)}</Text>
+  return <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', fontVariant: ['tabular-nums'] }}>Elapsed {formatElapsedTime(startedAt, now)}</Text>
 }
 
 function WorkCaptureCard({
@@ -187,6 +183,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
   const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
   const disabled = pending || !planItem
+  const dueTiming = formatDueTiming(priority.action.dueAt)
 
   return (
     <View style={{
@@ -215,7 +212,10 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
           <Text numberOfLines={isLead ? 2 : 1} style={{ color: C.t1, fontSize: isLead ? 20 : 16, fontWeight: isLead ? '700' : '600', lineHeight: isLead ? 24 : 20 }}>
             {priority.action.title}
           </Text>
-          <Text style={{ color: C.t2, fontSize: 12, lineHeight: 15 }}>{formatEstimatedDuration(priority.estimatedMinutes)}</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            <Text style={{ color: C.t2, fontSize: 12, lineHeight: 15 }}>{formatEstimatedEffort(priority.estimatedMinutes)}</Text>
+            {dueTiming && <Text style={{ color: dueTiming.startsWith('Overdue') ? C.danger : C.t2, fontSize: 12, lineHeight: 15 }}>{dueTiming}</Text>}
+          </View>
         </View>
         {isInProgress && (
           <View style={{ alignItems: 'flex-end', gap: 2 }}>
