@@ -275,6 +275,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     pendingActionId,
     capturing,
     error,
+    reload,
     startAction,
     completeAction,
     deferAction,
@@ -370,9 +371,17 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
       )}
 
       {!loading && error && (
-        <View style={{ marginHorizontal: 20, marginBottom: 16, backgroundColor: C.danger + '16', borderRadius: 16, padding: 16 }}>
-          <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>Today is unavailable</Text>
-          <Text style={[T.caption1, { marginTop: 4 }]}>{error}</Text>
+        <View style={{ marginHorizontal: 20, marginBottom: 16, backgroundColor: C.danger + '16', borderRadius: 16, padding: 16, gap: 10 }}>
+          <View>
+            <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>{error.source === 'mutation' ? "Couldn't update this action" : 'Today is unavailable'}</Text>
+            <Text style={[T.caption1, { marginTop: 4 }]}>{error.message}</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => void reload()}
+            style={{ alignSelf: 'flex-start', backgroundColor: C.surface2, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 8 }}
+          >
+            <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>Retry</Text>
+          </TouchableOpacity>
         </View>
       )}
 

@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
 import type { TodayPlanState, WorkCaptureInput } from '../domain'
+import { transitionTodayError, type TodayCommandError, type TodayMutationOperation } from './todayErrorState'
 
-type TodayOperation = 'start' | 'complete' | 'defer' | 'skip' | 'reconsider'
+type TodayOperation = Exclude<TodayMutationOperation, 'capture'>
 
 export function useTodayPlan(userId: string | undefined) {
   const service = useMemo(() => new TodayService(new SupabaseRyqenRepository()), [])
@@ -11,25 +12,31 @@ export function useTodayPlan(userId: string | undefined) {
   const [loading, setLoading] = useState(Boolean(userId))
   const [pendingActionId, setPendingActionId] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<TodayCommandError | null>(null)
 
-  const reload = useCallback(async () => {
+  const applyError = useCallback((event: Parameters<typeof transitionTodayError>[1]) => {
+    setError((current) => transitionTodayError(current, event))
+  }, [])
+
+  const reload = useCallback(async ({ preserveError = false }: { preserveError?: boolean } = {}) => {
     if (!userId) {
       setState(null)
       setLoading(false)
+      applyError({ type: 'clear' })
       return
     }
 
     setLoading(true)
-    setError(null)
+    if (!preserveError) applyError({ type: 'clear' })
     try {
       setState(await service.planToday(userId))
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to load Today.')
+      applyError({ type: 'reload_succeeded', preserveExisting: preserveError })
+    } catch {
+      applyError({ type: 'reload_failed' })
     } finally {
       setLoading(false)
     }
-  }, [service, userId])
+  }, [applyError, service, userId])
 
   useEffect(() => {
     void reload()
@@ -39,7 +46,7 @@ export function useTodayPlan(userId: string | undefined) {
     if (!userId) return
 
     setPendingActionId(actionId)
-    setError(null)
+    applyError({ type: 'clear' })
     try {
       const nextState = operation === 'start'
         ? await service.startAction(userId, actionId)
@@ -51,30 +58,32 @@ export function useTodayPlan(userId: string | undefined) {
               ? await service.skipPlanItem(userId, actionId)
               : await service.reconsiderDeferredAction(userId, actionId)
       setState(nextState)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to update this action.')
-      await reload()
+      applyError({ type: 'mutation_succeeded' })
+    } catch {
+      applyError({ type: 'mutation_failed', operation })
+      await reload({ preserveError: true })
     } finally {
       setPendingActionId(null)
     }
-  }, [reload, service, userId])
+  }, [applyError, reload, service, userId])
 
   const captureAction = useCallback(async (input: WorkCaptureInput): Promise<boolean> => {
     if (!userId) return false
 
     setCapturing(true)
-    setError(null)
+    applyError({ type: 'clear' })
     try {
       setState(await service.captureAction(userId, input))
+      applyError({ type: 'mutation_succeeded' })
       return true
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to capture this work.')
-      await reload()
+    } catch {
+      applyError({ type: 'mutation_failed', operation: 'capture' })
+      await reload({ preserveError: true })
       return false
     } finally {
       setCapturing(false)
     }
-  }, [reload, service, userId])
+  }, [applyError, reload, service, userId])
 
   return {
     state,
