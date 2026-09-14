@@ -198,15 +198,49 @@ test('replanning replaces obsolete unstarted recommendations without recording a
   await assert.rejects(() => service.startAction(userId, 'other', now), /Invalid atomic Today action operation/)
 })
 
-test('does not create a daily plan when no actionable recommendations exist', async () => {
+test('returns no_pending_work without creating a daily plan when no actionable pending work exists', async () => {
   const repository = new MemoryRyqenRepository([])
   const service = new TodayService(repository)
 
   const state = await service.planToday(userId, now)
 
   assert.equal(state.plan, null)
+  assert.equal(state.emptyState, 'no_pending_work')
   assert.deepEqual(state.priorities, [])
   assert.deepEqual(repository.plans, [])
+})
+
+test('returns no_work_fits_current_time without creating a daily plan at zero available time', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  repository.data.contexts = [{
+    id: 'time', userId, key: 'available_time', value: 0, source: 'user', expiresAt: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  }]
+  const service = new TodayService(repository)
+
+  const state = await service.planToday(userId, now)
+
+  assert.equal(state.plan, null)
+  assert.equal(state.emptyState, 'no_work_fits_current_time')
+  assert.deepEqual(state.priorities, [])
+  assert.deepEqual(repository.plans, [])
+})
+
+test('propagates pending_work_unavailable from an existing Today plan', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  const service = new TodayService(repository)
+
+  await service.planToday(userId, now)
+  repository.data.contexts = [{
+    id: 'blocked', userId, key: 'blocked_action_ids', value: ['action-1'], source: 'user', expiresAt: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  }]
+
+  const state = await service.planToday(userId, now)
+
+  assert.ok(state.plan)
+  assert.equal(state.emptyState, 'pending_work_unavailable')
+  assert.deepEqual(state.priorities, [])
 })
 
 test('plan-item persistence preserves one item per action and plan', async () => {
