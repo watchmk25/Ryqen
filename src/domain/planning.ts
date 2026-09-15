@@ -3,6 +3,12 @@ import type { Action, Context, Goal, JsonValue, PlanningContext, PlanningData, P
 const DEFAULT_ESTIMATED_MINUTES = 30
 const MAX_PRIORITY_ACTIONS = 3
 
+type RationaleFactor = {
+  label: string
+  contribution: number
+  order: number
+}
+
 function asRecord(value: JsonValue): Record<string, JsonValue> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : null
 }
@@ -98,25 +104,12 @@ function dueDateAdjustment(dueAt: string | null, now: Date): { score: number; re
   return { score: 0, reason: null }
 }
 
-function buildRationale(input: {
-  importance: number
-  dueReason: string | null
-  goal: Goal | null
-  minutes: number
-  planningContext: PlanningContext
-  preferred: boolean
-}): string {
-  const reasons: string[] = []
-  if (input.importance >= 4) reasons.push('High importance')
-  if (input.dueReason) reasons.push(input.dueReason)
-  if (input.goal) reasons.push('Supports an active goal')
-  if (input.planningContext.availableTimeMinutes !== null && input.minutes <= input.planningContext.availableTimeMinutes) {
-    reasons.push(`Fits your ${input.planningContext.availableTimeMinutes}-minute window`)
-  }
-  if (input.planningContext.capacity === 'low' && input.minutes <= 15) reasons.push('Light enough for low capacity')
-  if (input.minutes <= 15) reasons.push('Quick to complete')
-  if (input.preferred) reasons.push('Matches a stated preference')
-  return reasons.slice(0, 3).join(' · ') || 'A practical next step for today'
+function buildRationale(factors: RationaleFactor[]): string {
+  return factors
+    .sort((left, right) => right.contribution - left.contribution || left.order - right.order)
+    .slice(0, 3)
+    .map((factor) => factor.label)
+    .join(' · ') || 'A practical next step for today'
 }
 
 function isActionableTask(task: Task): boolean {
@@ -179,6 +172,25 @@ export function calculatePriority(action: Action, data: PlanningData, planningCo
   if (planningContext.preferShortActions && minutes <= 30) score += 6
   if (preferred) score += 8
 
+  const preferenceContribution = (planningContext.preferShortActions && minutes <= 30 ? 6 : 0)
+    + (preferred ? 8 : 0)
+  const rationaleFactors: RationaleFactor[] = []
+  if (importance >= 4) rationaleFactors.push({ label: 'High importance', contribution: importance * 10, order: 0 })
+  if (urgency >= 4) rationaleFactors.push({ label: 'High urgency', contribution: urgency * 7, order: 1 })
+  if (due.reason) rationaleFactors.push({ label: due.reason, contribution: due.score, order: 2 })
+  if (goal) rationaleFactors.push({ label: 'Supports an active goal', contribution: goal.importance * 4, order: 3 })
+  if (project) rationaleFactors.push({ label: 'Supports an active project', contribution: project.importance * 2, order: 4 })
+  if (planningContext.availableTimeMinutes !== null && minutes <= planningContext.availableTimeMinutes) {
+    rationaleFactors.push({ label: `Fits your ${planningContext.availableTimeMinutes}-minute window`, contribution: 8, order: 5 })
+  }
+  if (planningContext.capacity === 'low' && minutes <= 15) {
+    rationaleFactors.push({ label: 'Light enough for low capacity', contribution: 8, order: 6 })
+  }
+  if (minutes <= 15) rationaleFactors.push({ label: 'Quick to complete', contribution: 4, order: 7 })
+  if (preferenceContribution > 0) {
+    rationaleFactors.push({ label: 'Matches a stated preference', contribution: preferenceContribution, order: 8 })
+  }
+
   return {
     action,
     task,
@@ -186,7 +198,7 @@ export function calculatePriority(action: Action, data: PlanningData, planningCo
     goal,
     estimatedMinutes: minutes,
     priorityScore: score,
-    rationale: buildRationale({ importance, dueReason: due.reason, goal, minutes, planningContext, preferred }),
+    rationale: buildRationale(rationaleFactors),
   }
 }
 

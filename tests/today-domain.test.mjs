@@ -58,7 +58,81 @@ test('prioritizes urgent, high-importance work and returns an explanation', () =
   }
   const selected = selectTodayPriorities(data, derivePlanningContext([], now), [], now)
   assert.equal(selected[0].action.id, 'urgent')
-  assert.match(selected[0].rationale, /High importance|Due today/)
+  assert.equal(selected[0].priorityScore, 110)
+  assert.equal(selected[0].rationale, 'High importance · High urgency · Due today')
+})
+
+test('explains meaningful urgency even without a deadline or high importance', () => {
+  const data = {
+    contexts: [], goals: [], projects: [],
+    tasks: [task('urgent-task', { urgency: 5 })],
+    actions: [action('urgent', { taskId: 'urgent-task' })],
+  }
+
+  assert.equal(
+    selectTodayPriorities(data, derivePlanningContext([], now), [], now)[0].rationale,
+    'High urgency',
+  )
+})
+
+test('uses contribution order so preference is not hidden behind a weaker goal factor', () => {
+  const contexts = [{
+    id: 'preferences', userId, key: 'preferences', value: { preferred_action_ids: ['important'] }, source: 'user',
+    expiresAt: null, createdAt: '', updatedAt: '',
+  }]
+  const data = {
+    contexts,
+    goals: [{ id: 'goal', userId, title: 'Goal', description: null, status: 'active', importance: 1, targetDate: null, createdAt: '', updatedAt: '' }],
+    projects: [], tasks: [task('important-task', { importance: 5, goalId: 'goal' })],
+    actions: [action('important', { taskId: 'important-task', dueAt: '2026-09-12T17:00:00Z' })],
+  }
+
+  assert.equal(
+    selectTodayPriorities(data, derivePlanningContext(contexts, now), [], now)[0].rationale,
+    'High importance · Due today · Matches a stated preference',
+  )
+})
+
+test('explains positive low-capacity and quick-effort contributions', () => {
+  const contexts = [{
+    id: 'capacity', userId, key: 'capacity', value: 'low', source: 'user', expiresAt: null, createdAt: '', updatedAt: '',
+  }]
+  const data = {
+    contexts, goals: [], projects: [], tasks: [], actions: [action('quick', { estimatedMinutes: 15 })],
+  }
+
+  assert.equal(
+    selectTodayPriorities(data, derivePlanningContext(contexts, now), [], now)[0].rationale,
+    'Light enough for low capacity · Quick to complete',
+  )
+})
+
+test('keeps the generic rationale when no meaningful positive factor exists', () => {
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [], actions: [action('ordinary', { estimatedMinutes: 30 })],
+  }
+
+  assert.equal(
+    selectTodayPriorities(data, derivePlanningContext([], now), [], now)[0].rationale,
+    'A practical next step for today',
+  )
+})
+
+test('caps rationale labels at three while preserving existing deadline wording', () => {
+  const contexts = [
+    { id: 'capacity', userId, key: 'capacity', value: 'low', source: 'user', expiresAt: null, createdAt: '', updatedAt: '' },
+    { id: 'preferences', userId, key: 'preferences', value: { preferred_action_ids: ['priority'] }, source: 'user', expiresAt: null, createdAt: '', updatedAt: '' },
+  ]
+  const data = {
+    contexts,
+    goals: [{ id: 'goal', userId, title: 'Goal', description: null, status: 'active', importance: 5, targetDate: null, createdAt: '', updatedAt: '' }],
+    projects: [], tasks: [],
+    actions: [action('priority', { goalId: 'goal', estimatedMinutes: 15, dueAt: '2026-09-13T17:00:00Z' })],
+  }
+  const rationale = selectTodayPriorities(data, derivePlanningContext(contexts, now), [], now)[0].rationale
+
+  assert.equal(rationale, 'High importance · Supports an active goal · Due tomorrow')
+  assert.equal(rationale.split(' · ').length, 3)
 })
 
 test('limits Today to three fitting priority actions', () => {

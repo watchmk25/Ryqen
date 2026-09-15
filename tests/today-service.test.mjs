@@ -281,6 +281,17 @@ test('keeps one active action separate from three fresh recommendations', async 
   assert.equal(state.planItems.find((item) => item.actionId === 'action-1')?.status, 'in_progress')
 })
 
+test('keeps the persisted rationale when planned work becomes Active Work', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  const service = new TodayService(repository)
+
+  const planned = await service.planToday(userId, now)
+  const plannedRationale = planned.planItems.find((item) => item.actionId === 'action-1')?.rationale
+  const active = await service.startAction(userId, 'action-1', now)
+
+  assert.equal(active.activeWork[0].rationale, plannedRationale)
+})
+
 test('keeps multiple active actions accessible without consuming fresh recommendation slots', async () => {
   const repository = new MemoryRyqenRepository([
     createAction('action-1'), createAction('action-2'), createAction('action-3'), createAction('action-4'), createAction('action-5'),
