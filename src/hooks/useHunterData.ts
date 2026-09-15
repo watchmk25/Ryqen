@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { DEFAULT_CHARACTER, QUEST_POOL } from '../constants'
 import { calcLevel } from '../utils'
 import type { Quest, Character } from '../types'
+import { shouldShowHunterOnboarding } from './hunterOnboardingGate'
 
 const MAX_SHIELDS = 3
 const SHIELD_EVERY_N_DAYS = 5
@@ -38,7 +39,9 @@ export function useHunterData(userId: string | undefined) {
 
   async function initCharacter() {
     try {
-      const { data } = await supabase.from('characters').select('*').eq('user_id', userId!).single()
+      const { data, error: characterError } = await supabase.from('characters').select('*').eq('user_id', userId!).maybeSingle()
+      if (characterError) throw characterError
+
       if (data) {
         setCharacter({ name: data.name, rank: data.rank, title: data.title, stats: { STR: data.str, INT: data.int, VIT: data.vit, AGI: data.agi, END: data.endurance } })
         setXp(data.total_xp)
@@ -47,10 +50,18 @@ export function useHunterData(userId: string | undefined) {
         setLongestStreak(data.longest_streak || 0)
         setStreakShields(data.streak_shields || 0)
         setStreakCreditedDate(data.streak_credited_date || null)
-        if (!data.onboarding_complete) setShowOnboarding(true)
-        const { data: abilities } = await supabase.from('hunter_abilities').select('assessment_complete').eq('user_id', userId!).single()
-        if (data.onboarding_complete && !abilities?.assessment_complete) setShowAssessment(true)
+        const { data: profile, error: profileError } = await supabase.from('hunter_profile').select('onboarding_complete').eq('user_id', userId!).maybeSingle()
+        if (profileError) throw profileError
+        if (shouldShowHunterOnboarding({
+          characterOnboardingComplete: data.onboarding_complete,
+          profileOnboardingComplete: profile?.onboarding_complete,
+        })) setShowOnboarding(true)
       } else {
+        const { data: profile, error: profileError } = await supabase.from('hunter_profile').select('onboarding_complete').eq('user_id', userId!).maybeSingle()
+        if (profileError) throw profileError
+        if (profile) {
+          throw new Error('Hunter profile exists without a character record')
+        }
         await supabase.from('characters').insert({ user_id: userId! })
         await supabase.from('hunter_profile').insert({ user_id: userId! })
         await supabase.from('hunter_abilities').insert({ user_id: userId! })
