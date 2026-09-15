@@ -64,12 +64,21 @@ export interface CreateCapturedActionInput {
   estimatedMinutes: number
 }
 
+export interface CreateContextInput {
+  userId: string
+  key: string
+  value: JsonValue
+  source: ContextSource
+  expiresAt: string | null
+}
+
 /**
  * The application layer depends on this interface, rather than directly on
  * Supabase. It keeps planning testable without a signed-in session.
  */
 export interface RyqenRepository {
   loadPlanningData(userId: string): Promise<PlanningData>
+  createContexts(inputs: CreateContextInput[]): Promise<Context[]>
   findDailyPlan(userId: string, planDate: string): Promise<DailyPlan | null>
   createDailyPlan(input: CreateDailyPlanInput): Promise<DailyPlan>
   updateDailyPlan(id: string, input: UpdateDailyPlanInput): Promise<DailyPlan>
@@ -205,6 +214,18 @@ export class SupabaseRyqenRepository implements RyqenRepository {
       tasks: (unwrap(tasksResult.data, tasksResult.error, 'Load tasks') as DatabaseRow[]).map(mapTask),
       actions: (unwrap(actionsResult.data, actionsResult.error, 'Load actions') as DatabaseRow[]).map(mapAction),
     }
+  }
+
+  async createContexts(inputs: CreateContextInput[]): Promise<Context[]> {
+    if (inputs.length === 0) return []
+    const result = await supabase.from('contexts').insert(inputs.map((input) => ({
+      user_id: input.userId,
+      key: input.key,
+      value: input.value,
+      source: input.source,
+      expires_at: input.expiresAt,
+    }))).select('*')
+    return (unwrap(result.data, result.error, 'Create contexts') as DatabaseRow[]).map(mapContext)
   }
 
   async findDailyPlan(userId: string, planDate: string): Promise<DailyPlan | null> {

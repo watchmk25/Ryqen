@@ -26,6 +26,13 @@ class MemoryRyqenRepository {
   clone(value) { return structuredClone(value) }
   nextId(prefix) { this.sequence += 1; return `${prefix}-${this.sequence}` }
   async loadPlanningData() { return this.clone(this.data) }
+  async createContexts(inputs) {
+    const contexts = inputs.map((input) => ({
+      id: this.nextId('context'), ...input, createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    }))
+    this.data.contexts.push(...contexts)
+    return this.clone(contexts)
+  }
   async findDailyPlan(ownerId, planDate) {
     return this.clone(this.plans.find((plan) => plan.userId === ownerId && plan.planDate === planDate) ?? null)
   }
@@ -466,4 +473,64 @@ test('rejects an invalid captured duration before repository persistence', async
   assert.equal(repository.captureInputs.length, 0)
   assert.equal(repository.data.actions.length, 0)
   assert.equal(repository.activities.length, 0)
+})
+
+test('applies a Today check-in with canonical user contexts, local-day expiry, and a replanned state', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('long', { estimatedMinutes: 45 }),
+    createAction('short', { estimatedMinutes: 15 }),
+  ])
+  const service = new TodayService(repository)
+  const localNow = new Date(2026, 8, 12, 9, 0, 0)
+
+  const state = await service.applyTodayCheckIn(userId, {
+    availableTimeMinutes: 15,
+    capacity: 'low',
+  }, localNow)
+
+  assert.deepEqual(repository.data.contexts.map((context) => ({
+    userId: context.userId, key: context.key, value: context.value, source: context.source, expiresAt: context.expiresAt,
+  })), [
+    { userId, key: 'available_time_minutes', value: 15, source: 'user', expiresAt: new Date(2026, 8, 12, 23, 59, 59, 999).toISOString() },
+    { userId, key: 'capacity', value: 'low', source: 'user', expiresAt: new Date(2026, 8, 12, 23, 59, 59, 999).toISOString() },
+  ])
+  assert.equal(state.planningContext.availableTimeMinutes, 15)
+  assert.equal(state.planningContext.capacity, 'low')
+  assert.deepEqual(state.priorities.map((priority) => priority.action.id), ['short'])
+  assert.deepEqual(repository.activities, [])
+})
+
+test('a zero-time Today check-in preserves no-work and Active Work behavior without activity', async () => {
+  const noWorkRepository = new MemoryRyqenRepository([createAction('action-1')])
+  const noWorkService = new TodayService(noWorkRepository)
+
+  const noWorkState = await noWorkService.applyTodayCheckIn(userId, { availableTimeMinutes: 0 }, now)
+  assert.equal(noWorkState.plan, null)
+  assert.equal(noWorkState.emptyState, 'no_work_fits_current_time')
+  assert.deepEqual(noWorkRepository.activities, [])
+
+  const activeRepository = new MemoryRyqenRepository([createAction('action-1'), createAction('action-2')])
+  const activeService = new TodayService(activeRepository)
+  await activeService.startAction(userId, 'action-1', now)
+
+  const activeState = await activeService.applyTodayCheckIn(userId, { availableTimeMinutes: 0 }, now)
+  assert.deepEqual(activeState.activeWork.map((priority) => priority.action.id), ['action-1'])
+  assert.deepEqual(activeState.priorities, [])
+  assert.deepEqual(activeRepository.activities.map((activity) => activity.type), ['action_started', 'plan_item_started'])
+})
+
+test('repeated same-day Today check-ins append context and use the newest active time window', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('long', { estimatedMinutes: 45 }),
+    createAction('short', { estimatedMinutes: 15 }),
+  ])
+  const service = new TodayService(repository)
+
+  await service.applyTodayCheckIn(userId, { availableTimeMinutes: 120 }, now)
+  const state = await service.applyTodayCheckIn(userId, { availableTimeMinutes: 15 }, new Date(now.getTime() + 60000))
+
+  assert.equal(repository.data.contexts.filter((context) => context.key === 'available_time_minutes').length, 2)
+  assert.equal(state.planningContext.availableTimeMinutes, 15)
+  assert.deepEqual(state.priorities.map((priority) => priority.action.id), ['short'])
+  assert.deepEqual(repository.activities, [])
 })

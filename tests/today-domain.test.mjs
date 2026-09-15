@@ -4,6 +4,7 @@ import { canTransitionAction } from '../src/domain/actionTransitions.ts'
 import { formatElapsedTime } from '../src/domain/actionElapsed.ts'
 import { formatDueTiming, formatEstimatedEffort } from '../src/domain/actionTiming.ts'
 import { derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
+import { availableTimeMinutesForTodayPreset, prepareTodayCheckIn } from '../src/domain/todayCheckIn.ts'
 import { dueAtForCapture, estimatedMinutesForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
 
 const now = new Date('2026-09-12T09:00:00Z')
@@ -253,6 +254,36 @@ test('maps capture effort selections and validates custom duration', () => {
   assert.throws(() => estimatedMinutesForCapture('custom', 0), /Estimated duration/)
   assert.throws(() => estimatedMinutesForCapture('custom', 481), /Estimated duration/)
   assert.throws(() => estimatedMinutesForCapture('custom', 7.5), /Estimated duration/)
+})
+
+test('maps supported Today check-in time presets and validates available time', () => {
+  assert.equal(availableTimeMinutesForTodayPreset('15'), 15)
+  assert.equal(availableTimeMinutesForTodayPreset('30'), 30)
+  assert.equal(availableTimeMinutesForTodayPreset('60'), 60)
+  assert.equal(availableTimeMinutesForTodayPreset('120'), 120)
+  assert.equal(availableTimeMinutesForTodayPreset('180'), 180)
+  assert.equal(availableTimeMinutesForTodayPreset('none'), 0)
+  assert.throws(() => availableTimeMinutesForTodayPreset('45'), /supported available-time preset/)
+  assert.throws(() => prepareTodayCheckIn({ availableTimeMinutes: -1 }), /non-negative whole number/)
+  assert.throws(() => prepareTodayCheckIn({ availableTimeMinutes: 15.5 }), /non-negative whole number/)
+  assert.throws(() => prepareTodayCheckIn({ availableTimeMinutes: 45 }), /supported available-time preset/)
+})
+
+test('prepares expiring user-owned Today context for valid capacity values', () => {
+  const localNow = new Date(2026, 8, 12, 9, 30, 0)
+  const expectedExpiry = new Date(2026, 8, 12, 23, 59, 59, 999).toISOString()
+
+  for (const capacity of ['low', 'medium', 'high']) {
+    assert.deepEqual(prepareTodayCheckIn({ availableTimeMinutes: 30, capacity }, localNow), [
+      { key: 'available_time_minutes', value: 30, source: 'user', expiresAt: expectedExpiry },
+      { key: 'capacity', value: capacity, source: 'user', expiresAt: expectedExpiry },
+    ])
+  }
+
+  assert.deepEqual(prepareTodayCheckIn({ availableTimeMinutes: 0 }, localNow), [
+    { key: 'available_time_minutes', value: 0, source: 'user', expiresAt: expectedExpiry },
+  ])
+  assert.throws(() => prepareTodayCheckIn({ availableTimeMinutes: 30, capacity: 'rested' }), /supported capacity/)
 })
 
 test('uses standalone action importance in deterministic prioritization', () => {

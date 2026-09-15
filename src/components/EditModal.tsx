@@ -1,9 +1,18 @@
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Modal, StyleSheet } from 'react-native'
 import { C, T } from '../constants'
 
-type EditModalProps = { visible: boolean; title: string; onClose: () => void; onSave: () => void; saving: boolean; children: React.ReactNode }
+type EditModalProps = {
+  visible: boolean
+  title: string
+  onClose: () => void
+  onSave: () => void
+  saving: boolean
+  saveLabel?: string
+  saveDisabled?: boolean
+  children: React.ReactNode
+}
 
-export function EditModal({ visible, title, onClose, onSave, saving, children }: EditModalProps) {
+export function EditModal({ visible, title, onClose, onSave, saving, saveLabel = 'Save Changes', saveDisabled = false, children }: EditModalProps) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={{ flex: 1, backgroundColor: '#00000077' }} activeOpacity={1} onPress={onClose} />
@@ -19,8 +28,8 @@ export function EditModal({ visible, title, onClose, onSave, saving, children }:
           {children}
         </ScrollView>
         <View style={{ padding: 16, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.sep }}>
-          <TouchableOpacity style={{ backgroundColor: C.accent, borderRadius: 14, padding: 15, alignItems: 'center' }} onPress={onSave} disabled={saving}>
-            {saving ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Save Changes</Text>}
+          <TouchableOpacity style={{ backgroundColor: saveDisabled ? C.surface2 : C.accent, borderRadius: 14, padding: 15, alignItems: 'center' }} onPress={onSave} disabled={saving || saveDisabled}>
+            {saving ? <ActivityIndicator color="#fff" /> : <Text style={{ color: saveDisabled ? C.t3 : '#fff', fontWeight: '700', fontSize: 15 }}>{saveLabel}</Text>}
           </TouchableOpacity>
         </View>
       </View>

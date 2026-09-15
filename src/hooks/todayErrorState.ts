@@ -1,4 +1,4 @@
-export type TodayMutationOperation = 'start' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'capture'
+export type TodayMutationOperation = 'start' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'capture' | 'check_in'
 
 export interface TodayCommandError {
   source: 'mutation' | 'reload'
@@ -19,6 +19,7 @@ const mutationMessages: Record<TodayMutationOperation, string> = {
   skip: "Couldn't skip this action. Your plan was refreshed.",
   reconsider: "Couldn't reconsider this action. Your plan was refreshed.",
   capture: "Couldn't add this work. Your plan was refreshed.",
+  check_in: "Couldn't update today's availability. Your plan was refreshed.",
 }
 
 /** Keeps recovery feedback visible without exposing raw backend error text. */

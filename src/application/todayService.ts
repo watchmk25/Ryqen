@@ -1,4 +1,5 @@
 import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities } from '../domain/planning'
+import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayCheckIn'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
 import type { PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
@@ -148,6 +149,12 @@ export class TodayService {
     const capture = prepareWorkCapture(input, now)
     const action = await this.repository.createCapturedAction(capture)
     return { state: await this.planToday(userId, now), capturedActionId: action.id }
+  }
+
+  async applyTodayCheckIn(userId: string, input: TodayCheckInInput, now = new Date()): Promise<TodayPlanState> {
+    const contexts = prepareTodayCheckIn(input, now)
+    await this.repository.createContexts(contexts.map((context) => ({ ...context, userId })))
+    return this.planToday(userId, now)
   }
 
   async startAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
-import type { TodayPlanState, WorkCaptureInput } from '../domain'
+import type { TodayCheckInInput, TodayPlanState, WorkCaptureInput } from '../domain'
 import { acknowledgementForTodayAction, type TodayAcknowledgement } from './todayAcknowledgement'
 import { canMutateToday, transitionTodayAvailability, type TodayAvailability } from './todayAvailabilityState'
 import { transitionTodayError, type TodayCommandError, type TodayMutationOperation } from './todayErrorState'
 
-type TodayOperation = Exclude<TodayMutationOperation, 'capture'>
+type TodayOperation = Exclude<TodayMutationOperation, 'capture' | 'check_in'>
 
 export function useTodayPlan(userId: string | undefined) {
   const service = useMemo(() => new TodayService(new SupabaseRyqenRepository()), [])
@@ -14,6 +14,7 @@ export function useTodayPlan(userId: string | undefined) {
   const [loading, setLoading] = useState(Boolean(userId))
   const [pendingActionId, setPendingActionId] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
+  const [checkingIn, setCheckingIn] = useState(false)
   const [error, setError] = useState<TodayCommandError | null>(null)
   const [acknowledgement, setAcknowledgement] = useState<TodayAcknowledgement | null>(null)
   const [availability, setAvailability] = useState<TodayAvailability>('current')
@@ -111,11 +112,33 @@ export function useTodayPlan(userId: string | undefined) {
     }
   }, [applyAvailability, applyError, reload, service, userId])
 
+  const applyTodayCheckIn = useCallback(async (input: TodayCheckInInput): Promise<boolean> => {
+    if (!userId || !canMutateToday(availabilityRef.current)) return false
+
+    setCheckingIn(true)
+    setAcknowledgement(null)
+    applyError({ type: 'clear' })
+    try {
+      const nextState = await service.applyTodayCheckIn(userId, input)
+      setState(nextState)
+      applyAvailability({ type: 'received_current_state' })
+      applyError({ type: 'mutation_succeeded' })
+      return true
+    } catch {
+      applyError({ type: 'mutation_failed', operation: 'check_in' })
+      await reload({ preserveError: true })
+      return false
+    } finally {
+      setCheckingIn(false)
+    }
+  }, [applyAvailability, applyError, reload, service, userId])
+
   return {
     state,
     loading,
     pendingActionId,
     capturing,
+    checkingIn,
     error,
     acknowledgement,
     isTodayUnavailable: !canMutateToday(availability),
@@ -126,5 +149,6 @@ export function useTodayPlan(userId: string | undefined) {
     skipPlanItem: (actionId: string) => perform('skip', actionId),
     reconsiderDeferredAction: (actionId: string) => perform('reconsider', actionId),
     captureAction,
+    applyTodayCheckIn,
   }
 }

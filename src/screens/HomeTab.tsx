@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import { DailySummaryRow } from '../components'
+import { DailySummaryRow, EditModal } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import { DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayEmptyState, type WorkCaptureInput } from '../domain'
+import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
@@ -42,6 +42,18 @@ type WorkCaptureCardProps = {
   onCancel: () => void
 }
 
+type TodayCheckInSheetProps = {
+  visible: boolean
+  timePreset: TodayTimePreset
+  capacity: TodayCapacity | null
+  saving: boolean
+  unavailable: boolean
+  onChangeTimePreset: (preset: TodayTimePreset) => void
+  onChangeCapacity: (capacity: TodayCapacity) => void
+  onApply: () => void
+  onClose: () => void
+}
+
 function emptyStateTitle(emptyState: TodayEmptyState): string {
   switch (emptyState) {
     case 'no_work_fits_current_time':
@@ -73,6 +85,21 @@ const effortOptions: Array<{ label: string; value: CaptureEffort }> = [
   { label: '30 min', value: '30' },
   { label: '1 hr', value: '60' },
   { label: 'Custom', value: 'custom' },
+]
+
+const todayTimeOptions: Array<{ label: string; value: TodayTimePreset }> = [
+  { label: '15 min', value: '15' },
+  { label: '30 min', value: '30' },
+  { label: '1 hr', value: '60' },
+  { label: '2 hr', value: '120' },
+  { label: '3+ hr', value: '180' },
+  { label: 'None', value: 'none' },
+]
+
+const todayCapacityOptions: Array<{ label: string; value: TodayCapacity }> = [
+  { label: 'Low', value: 'low' },
+  { label: 'Normal', value: 'medium' },
+  { label: 'High', value: 'high' },
 ]
 
 function greetingForNow(): string {
@@ -197,6 +224,61 @@ function WorkCaptureCard({
   )
 }
 
+function TodayCheckInSheet({
+  visible, timePreset, capacity, saving, unavailable,
+  onChangeTimePreset, onChangeCapacity, onApply, onClose,
+}: TodayCheckInSheetProps) {
+  return (
+    <EditModal
+      visible={visible}
+      title="Adjust today"
+      onClose={onClose}
+      onSave={onApply}
+      saving={saving}
+      saveLabel="Apply"
+      saveDisabled={unavailable}
+    >
+      <View style={{ gap: 8 }}>
+        <Text style={[T.subhead, { color: C.t1 }]}>How much time do you have today?</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {todayTimeOptions.map((option) => {
+            const selected = timePreset === option.value
+            return (
+              <TouchableOpacity
+                key={option.value}
+                disabled={unavailable || saving}
+                onPress={() => onChangeTimePreset(option.value)}
+                style={{ backgroundColor: selected ? C.accentDim : C.bg, borderColor: selected ? C.accent : C.sep, borderWidth: 1, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 10 }}
+              >
+                <Text style={{ color: selected ? C.accent : C.t2, fontSize: 13, fontWeight: '700' }}>{option.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+      </View>
+      <View style={{ gap: 8 }}>
+        <Text style={[T.subhead, { color: C.t1 }]}>How&apos;s your capacity today?</Text>
+        <Text style={T.caption1}>Optional</Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {todayCapacityOptions.map((option) => {
+            const selected = capacity === option.value
+            return (
+              <TouchableOpacity
+                key={option.value}
+                disabled={unavailable || saving}
+                onPress={() => onChangeCapacity(option.value)}
+                style={{ flex: 1, backgroundColor: selected ? C.accentDim : C.bg, borderColor: selected ? C.accent : C.sep, borderWidth: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center' }}
+              >
+                <Text style={{ color: selected ? C.accent : C.t2, fontSize: 13, fontWeight: '700' }}>{option.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+      </View>
+    </EditModal>
+  )
+}
+
 function PriorityCard({ priority, planItem, position, variant = 'priority', pending, unavailable, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
   const isActiveWork = variant === 'active'
   const isLead = !isActiveWork && position === 1
@@ -289,11 +371,15 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const [captureImportance, setCaptureImportance] = useState<CaptureImportance>('normal')
   const [captureEffort, setCaptureEffort] = useState<CaptureEffort>(DEFAULT_CAPTURE_EFFORT)
   const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState('')
+  const [showTodayCheckIn, setShowTodayCheckIn] = useState(false)
+  const [todayTimePreset, setTodayTimePreset] = useState<TodayTimePreset>('30')
+  const [todayCapacity, setTodayCapacity] = useState<TodayCapacity | null>(null)
   const {
     state,
     loading,
     pendingActionId,
     capturing,
+    checkingIn,
     error,
     acknowledgement,
     isTodayUnavailable,
@@ -304,6 +390,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     skipPlanItem,
     reconsiderDeferredAction,
     captureAction,
+    applyTodayCheckIn,
   } = useTodayPlan(userId)
 
   const deferredItems = state?.planItems
@@ -343,6 +430,26 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     setShowCapture(false)
   }
 
+  function openTodayCheckIn() {
+    const availableTimeMinutes = state?.planningContext.availableTimeMinutes
+    const matchingPreset = todayTimeOptions.find((option) => availableTimeMinutes === availableTimeMinutesForTodayPreset(option.value))
+    setTodayTimePreset(matchingPreset?.value ?? '30')
+    setTodayCapacity(state?.planningContext.capacity ?? null)
+    setShowTodayCheckIn(true)
+  }
+
+  async function submitTodayCheckIn() {
+    const applied = await applyTodayCheckIn({
+      availableTimeMinutes: availableTimeMinutesForTodayPreset(todayTimePreset),
+      capacity: todayCapacity,
+    })
+    if (applied) setShowTodayCheckIn(false)
+  }
+
+  function closeTodayCheckIn() {
+    if (!checkingIn) setShowTodayCheckIn(false)
+  }
+
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
       <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 18 }}>
@@ -358,11 +465,16 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         <View style={{ marginTop: 18, gap: 3 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={{ color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.3 }}>TODAY</Text>
-            {!showCapture && (
-              <TouchableOpacity disabled={isTodayUnavailable} onPress={() => setShowCapture(true)} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
-                <Text style={{ color: C.accent, fontSize: 12, fontWeight: '800' }}>+ Add</Text>
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <TouchableOpacity disabled={isTodayUnavailable || checkingIn} onPress={openTodayCheckIn} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
+                <Text style={{ color: isTodayUnavailable ? C.t3 : C.accent, fontSize: 12, fontWeight: '800' }}>Adjust today</Text>
               </TouchableOpacity>
-            )}
+              {!showCapture && (
+                <TouchableOpacity disabled={isTodayUnavailable} onPress={() => setShowCapture(true)} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <Text style={{ color: isTodayUnavailable ? C.t3 : C.accent, fontSize: 12, fontWeight: '800' }}>+ Add</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
           <Text style={[T.headline, { fontSize: 17, lineHeight: 21 }]}>{"Here's what matters right now."}</Text>
         </View>
@@ -386,6 +498,18 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           onCancel={closeCapture}
         />
       )}
+
+      <TodayCheckInSheet
+        visible={showTodayCheckIn}
+        timePreset={todayTimePreset}
+        capacity={todayCapacity}
+        saving={checkingIn}
+        unavailable={isTodayUnavailable}
+        onChangeTimePreset={setTodayTimePreset}
+        onChangeCapacity={setTodayCapacity}
+        onApply={() => void submitTodayCheckIn()}
+        onClose={closeTodayCheckIn}
+      />
 
       {loading && (
         <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
