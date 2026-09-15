@@ -18,6 +18,7 @@ type PriorityCardProps = {
   position: number
   variant?: 'active' | 'priority'
   pending: boolean
+  unavailable: boolean
   onStart: (actionId: string) => void
   onComplete: (actionId: string) => void
   onDefer: (actionId: string) => void
@@ -31,6 +32,7 @@ type WorkCaptureCardProps = {
   effort: CaptureEffort
   customEstimatedMinutes: string
   submitting: boolean
+  unavailable: boolean
   onChangeTitle: (title: string) => void
   onChangeDueTiming: (dueTiming: CaptureDueTiming) => void
   onChangeImportance: (importance: CaptureImportance) => void
@@ -91,18 +93,19 @@ function ElapsedTime({ startedAt }: { startedAt: string }) {
 }
 
 function WorkCaptureCard({
-  title, dueTiming, importance, effort, customEstimatedMinutes, submitting,
+  title, dueTiming, importance, effort, customEstimatedMinutes, submitting, unavailable,
   onChangeTitle, onChangeDueTiming, onChangeImportance, onChangeEffort, onChangeCustomEstimatedMinutes, onSubmit, onCancel,
 }: WorkCaptureCardProps) {
   const customMinutes = Number(customEstimatedMinutes)
   const customEffortIsValid = effort !== 'custom'
     || (Number.isInteger(customMinutes) && customMinutes >= 1 && customMinutes <= MAX_CAPTURE_ESTIMATED_MINUTES)
-  const canSubmit = title.trim().length > 0 && customEffortIsValid && !submitting
+  const canSubmit = title.trim().length > 0 && customEffortIsValid && !submitting && !unavailable
 
   return (
     <View style={{ marginHorizontal: 20, marginBottom: 12, backgroundColor: C.surface, borderRadius: 16, padding: 14, gap: 12 }}>
       <TextInput
         autoFocus
+        editable={!unavailable}
         value={title}
         onChangeText={onChangeTitle}
         onSubmitEditing={() => { if (canSubmit) onSubmit() }}
@@ -119,6 +122,7 @@ function WorkCaptureCard({
             return (
               <TouchableOpacity
                 key={option.value}
+                disabled={unavailable}
                 onPress={() => onChangeDueTiming(option.value)}
                 style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 7 }}
               >
@@ -136,6 +140,7 @@ function WorkCaptureCard({
             return (
               <TouchableOpacity
                 key={option.value}
+                disabled={unavailable}
                 onPress={() => onChangeImportance(option.value)}
                 style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 11, paddingVertical: 7 }}
               >
@@ -153,6 +158,7 @@ function WorkCaptureCard({
             return (
               <TouchableOpacity
                 key={option.value}
+                disabled={unavailable}
                 onPress={() => onChangeEffort(option.value)}
                 style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 7 }}
               >
@@ -164,6 +170,7 @@ function WorkCaptureCard({
         {effort === 'custom' && (
           <TextInput
             autoFocus
+            editable={!unavailable}
             value={customEstimatedMinutes}
             onChangeText={onChangeCustomEstimatedMinutes}
             keyboardType="number-pad"
@@ -190,11 +197,11 @@ function WorkCaptureCard({
   )
 }
 
-function PriorityCard({ priority, planItem, position, variant = 'priority', pending, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
+function PriorityCard({ priority, planItem, position, variant = 'priority', pending, unavailable, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
   const isActiveWork = variant === 'active'
   const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
-  const disabled = pending || !planItem
+  const disabled = pending || unavailable || !planItem
   const dueTiming = formatDueTiming(priority.action.dueAt)
 
   return (
@@ -205,6 +212,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
       borderRadius: 16,
       padding: isLead ? 16 : 12,
       gap: 10,
+      opacity: unavailable ? 0.58 : 1,
     }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
         {!isActiveWork && (
@@ -288,6 +296,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     capturing,
     error,
     acknowledgement,
+    isTodayUnavailable,
     reload,
     startAction,
     completeAction,
@@ -306,6 +315,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const rankColor = RANK_COLORS[rank] ?? C.accent
 
   async function submitCapture() {
+    if (isTodayUnavailable) return
     const created = await captureAction({
       title: captureTitle,
       dueTiming: captureDueTiming,
@@ -349,7 +359,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={{ color: C.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1.3 }}>TODAY</Text>
             {!showCapture && (
-              <TouchableOpacity onPress={() => setShowCapture(true)} style={{ backgroundColor: C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
+              <TouchableOpacity disabled={isTodayUnavailable} onPress={() => setShowCapture(true)} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
                 <Text style={{ color: C.accent, fontSize: 12, fontWeight: '800' }}>+ Add</Text>
               </TouchableOpacity>
             )}
@@ -366,6 +376,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           effort={captureEffort}
           customEstimatedMinutes={customEstimatedMinutes}
           submitting={capturing}
+          unavailable={isTodayUnavailable}
           onChangeTitle={setCaptureTitle}
           onChangeDueTiming={setCaptureDueTiming}
           onChangeImportance={setCaptureImportance}
@@ -388,12 +399,13 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           <View>
             <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>{error.source === 'mutation' ? "Couldn't update this action" : 'Today is unavailable'}</Text>
             <Text style={[T.caption1, { marginTop: 4 }]}>{error.message}</Text>
+            {isTodayUnavailable && <Text style={[T.caption1, { marginTop: 4 }]}>Your displayed plan may be out of date. Refresh Today to continue.</Text>}
           </View>
           <TouchableOpacity
             onPress={() => void reload()}
             style={{ alignSelf: 'flex-start', backgroundColor: C.surface2, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 8 }}
           >
-            <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>Retry</Text>
+            <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>Refresh Today</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -419,6 +431,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               position={index + 1}
               variant="active"
               pending={pendingActionId === priority.action.id}
+              unavailable={isTodayUnavailable}
               onStart={(actionId) => void startAction(actionId)}
               onComplete={(actionId) => void completeAction(actionId)}
               onDefer={(actionId) => void deferAction(actionId)}
@@ -437,6 +450,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               planItem={state.planItems.find((item) => item.actionId === priority.action.id)}
               position={index + 1}
               pending={pendingActionId === priority.action.id}
+              unavailable={isTodayUnavailable}
               onStart={(actionId) => void startAction(actionId)}
               onComplete={(actionId) => void completeAction(actionId)}
               onDefer={(actionId) => void deferAction(actionId)}
@@ -475,7 +489,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
                   <Text style={[T.caption1, { marginTop: 3 }]}>Not in your immediate plan</Text>
                 </View>
                 <TouchableOpacity
-                  disabled={pending}
+                  disabled={pending || isTodayUnavailable}
                   onPress={() => void reconsiderDeferredAction(action.id)}
                   style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
                 >
