@@ -237,6 +237,14 @@ The existing `useHunterData` hook should not become Ryqen's permanent brain. Its
 
 The existing Hunter terminology, quests, XP, character/rank concepts, stat personalization, onboarding/assessment, and central hook are treated as legacy product structure.
 
+### Approved Decision — Legacy Hunter Assessment Is Non-Blocking
+
+The legacy Hunter Strength, Intelligence, Vitality, Agility, and Endurance assessment is **not** a V0.1 launch prerequisite. An authenticated user who has completed onboarding must be able to reach Home and the Today Command Center without completing that assessment.
+
+`hunter_abilities.assessment_complete` remains preserved legacy data. The launch gate must not infer V0.1 incompletion from it, and must not repair, reset, or fabricate assessment completion state merely to allow V0.1 access. Existing assessment data remains editable and the assessment may remain available for legacy, profile, and personalization purposes.
+
+The assessment is not required by Today, deterministic planning, Work Capture, lifecycle actions, or the adaptive daily-plan loop. Keeping it as a cold-launch blocker conflicts with the approved V0.1 direction: the Today Command Center is the core authenticated entry experience.
+
 Do not perform a risky full rewrite.
 
 Instead:
