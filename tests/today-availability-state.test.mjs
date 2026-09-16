@@ -42,6 +42,7 @@ test('reload availability does not replace mutation recovery feedback or acknowl
     plan: null,
     planItems: [],
     activeWork: [],
+    deferredWork: [],
     priorities: [],
     actions: [{ id: 'captured', title: 'Captured work' }],
     planningContext: {},

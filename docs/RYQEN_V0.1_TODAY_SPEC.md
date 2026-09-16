@@ -95,6 +95,25 @@ Plans may be replanned during the day when circumstances materially
 change. The context snapshot records the inputs used to generate the
 plan.
 
+### Cross-day work continuity
+
+Daily Plans and Plan Items are date-scoped planning snapshots; persistent
+Actions remain the source of truth for work state. A new local day evaluates
+pending Actions again without copying or rewriting yesterday's plan.
+
+- Persistent `in_progress` Actions remain visible and controllable in Active
+  Work across local-day boundaries. Active Work is separate from the maximum
+  three fresh recommendations.
+- Deferred Actions remain secondary and `deferred` across days. They are only
+  made pending again when the user explicitly chooses Reconsider; Ryqen does
+  not reactivate them automatically.
+- Skip is scoped to a Plan Item in its current plan. It leaves the underlying
+  Action pending, so that Action may be evaluated on a later day.
+
+Normal new-day planning preserves previous plans and plan items. An explicit
+lifecycle operation may update its original plan item when that item is the
+validated audit anchor for the action transition.
+
 ## 7. Action Lifecycle
 
 ``` text

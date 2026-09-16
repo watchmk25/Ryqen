@@ -25,7 +25,16 @@ class MemoryRyqenRepository {
 
   clone(value) { return structuredClone(value) }
   nextId(prefix) { this.sequence += 1; return `${prefix}-${this.sequence}` }
-  async loadPlanningData() { return this.clone(this.data) }
+  async loadPlanningData(ownerId) {
+    const owns = (item) => item.userId === ownerId
+    return this.clone({
+      contexts: this.data.contexts.filter(owns),
+      goals: this.data.goals.filter(owns),
+      projects: this.data.projects.filter(owns),
+      tasks: this.data.tasks.filter(owns),
+      actions: this.data.actions.filter(owns),
+    })
+  }
   async createContexts(inputs) {
     const contexts = inputs.map((input) => ({
       id: this.nextId('context'), ...input, createdAt: now.toISOString(), updatedAt: now.toISOString(),
@@ -48,6 +57,16 @@ class MemoryRyqenRepository {
   }
   async listPlanItems(planId) {
     return this.clone(this.planItems.filter((item) => item.dailyPlanId === planId).sort((a, b) => a.position - b.position))
+  }
+  async listPlanItemsForActionStatuses(ownerId, statuses) {
+    const ownPlanIds = new Set(this.plans.filter((plan) => plan.userId === ownerId).map((plan) => plan.id))
+    return this.clone(this.planItems
+      .filter((item) => ownPlanIds.has(item.dailyPlanId) && statuses.includes(item.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)))
+  }
+  async findPlanItemForActionStatus(ownerId, actionId, status) {
+    const items = await this.listPlanItemsForActionStatuses(ownerId, [status])
+    return items.find((item) => item.actionId === actionId) ?? null
   }
   async createPlanItems(inputs) {
     const items = inputs
@@ -533,4 +552,147 @@ test('repeated same-day Today check-ins append context and use the newest active
   assert.equal(state.planningContext.availableTimeMinutes, 15)
   assert.deepEqual(state.priorities.map((priority) => priority.action.id), ['short'])
   assert.deepEqual(repository.activities, [])
+})
+
+test('pending work is planned again on the next local day without changing yesterday\'s snapshot', async () => {
+  const repository = new MemoryRyqenRepository([createAction('pending-action')])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  const yesterday = await service.planToday(userId, dayOne)
+  const yesterdayPlan = structuredClone(yesterday.plan)
+  const yesterdayItem = structuredClone(yesterday.planItems[0])
+  const today = await service.planToday(userId, dayTwo)
+
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(today.plan?.planDate, '2026-09-13')
+  assert.deepEqual(today.priorities.map((priority) => priority.action.id), ['pending-action'])
+  assert.deepEqual(repository.plans.find((plan) => plan.id === yesterday.plan.id), yesterdayPlan)
+  assert.deepEqual(repository.planItems.find((item) => item.id === yesterdayItem.id), yesterdayItem)
+  assert.notEqual(today.plan?.id, yesterday.plan?.id)
+})
+
+test('overnight in-progress work remains Active Work, preserves started_at, and does not consume fresh slots', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('active-action'), createAction('pending-1'), createAction('pending-2'), createAction('pending-3'), createAction('pending-4'),
+  ])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  await service.startAction(userId, 'active-action', dayOne)
+  const startedAt = repository.data.actions.find((action) => action.id === 'active-action').startedAt
+  const yesterdayPlanId = repository.plans[0].id
+  const today = await service.planToday(userId, dayTwo)
+
+  assert.equal(repository.data.actions.find((action) => action.id === 'active-action').status, 'in_progress')
+  assert.equal(today.activeWork[0].action.id, 'active-action')
+  assert.equal(today.activeWork[0].planItem?.dailyPlanId, yesterdayPlanId)
+  assert.equal(today.activeWork[0].action.startedAt, startedAt)
+  assert.equal(today.priorities.length, 3)
+  assert.equal(today.priorities.some((priority) => priority.action.id === 'active-action'), false)
+  assert.equal(today.planItems.some((item) => item.actionId === 'active-action'), false)
+})
+
+test('overnight Active Work remains visible without pending work and can be completed through its original lifecycle item', async () => {
+  const repository = new MemoryRyqenRepository([createAction('active-action')])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  await service.startAction(userId, 'active-action', dayOne)
+  const overnight = await service.planToday(userId, dayTwo)
+  assert.equal(overnight.plan, null)
+  assert.equal(overnight.emptyState, null)
+  assert.deepEqual(overnight.activeWork.map((work) => work.action.id), ['active-action'])
+
+  const completed = await service.completeAction(userId, 'active-action', dayTwo)
+  assert.equal(repository.data.actions[0].status, 'completed')
+  assert.deepEqual(completed.activeWork, [])
+  assert.deepEqual(repository.activities.map((activity) => activity.type), [
+    'action_started', 'plan_item_started', 'action_completed', 'plan_item_completed',
+  ])
+})
+
+test('multiple overnight Active Work items remain visible and an individual item can be deferred through its original lifecycle item', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('active-1'), createAction('active-2'), createAction('pending'),
+  ])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  await service.startAction(userId, 'active-1', dayOne)
+  await service.startAction(userId, 'active-2', dayOne)
+  const overnight = await service.planToday(userId, dayTwo)
+  assert.deepEqual(overnight.activeWork.map((work) => work.action.id).sort(), ['active-1', 'active-2'])
+  assert.deepEqual(overnight.priorities.map((priority) => priority.action.id), ['pending'])
+
+  const deferred = await service.deferAction(userId, 'active-1', dayTwo)
+  assert.equal(repository.data.actions.find((action) => action.id === 'active-1').status, 'deferred')
+  assert.deepEqual(deferred.activeWork.map((work) => work.action.id), ['active-2'])
+  assert.deepEqual(deferred.deferredWork.map((work) => work.action.id), ['active-1'])
+  assert.deepEqual(repository.activities.map((activity) => activity.type), [
+    'action_started', 'plan_item_started', 'action_started', 'plan_item_started', 'action_deferred',
+  ])
+})
+
+test('previous-day deferred work stays secondary and can be explicitly reconsidered through its original lifecycle item', async () => {
+  const repository = new MemoryRyqenRepository([createAction('deferred-action')])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  await service.deferAction(userId, 'deferred-action', dayOne)
+  const yesterdayItem = structuredClone(repository.planItems[0])
+  const overnight = await service.planToday(userId, dayTwo)
+  assert.equal(overnight.plan, null)
+  assert.equal(repository.data.actions[0].status, 'deferred')
+  assert.deepEqual(overnight.deferredWork.map((work) => work.action.id), ['deferred-action'])
+  assert.deepEqual(overnight.priorities, [])
+
+  const reconsidered = await service.reconsiderDeferredAction(userId, 'deferred-action', dayTwo)
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(repository.planItems.find((item) => item.id === yesterdayItem.id)?.status, 'pending')
+  assert.deepEqual(reconsidered.deferredWork, [])
+  assert.deepEqual(reconsidered.priorities.map((priority) => priority.action.id), ['deferred-action'])
+  assert.deepEqual(repository.activities.map((activity) => activity.type), ['action_deferred'])
+})
+
+test('a skipped yesterday plan item leaves persistent pending work eligible for a new local day', async () => {
+  const repository = new MemoryRyqenRepository([createAction('skipped-action')])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  await service.planToday(userId, dayOne)
+  await service.skipPlanItem(userId, 'skipped-action', dayOne)
+  const today = await service.planToday(userId, dayTwo)
+
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(repository.planItems.find((item) => item.dailyPlanId === repository.plans[0].id)?.status, 'skipped')
+  assert.deepEqual(today.priorities.map((priority) => priority.action.id), ['skipped-action'])
+})
+
+test('cross-day lifecycle discovery is isolated to the authenticated user', async () => {
+  const otherUserId = 'user-2'
+  const otherAction = createAction('other-deferred', { userId: otherUserId, status: 'deferred' })
+  const repository = new MemoryRyqenRepository([createAction('own-pending'), otherAction])
+  repository.plans.push({
+    id: 'other-plan', userId: otherUserId, planDate: '2026-09-12', status: 'active', contextSnapshot: {},
+    generatedAt: now.toISOString(), createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  })
+  repository.planItems.push({
+    id: 'other-item', dailyPlanId: 'other-plan', actionId: 'other-deferred', position: 1, priorityScore: 10,
+    rationale: 'Other user', estimatedMinutes: 15, status: 'deferred', createdAt: now.toISOString(),
+  })
+  const service = new TodayService(repository)
+
+  const state = await service.planToday(userId, new Date(2026, 8, 13, 9, 0, 0))
+  assert.equal(state.actions.some((action) => action.id === 'other-deferred'), false)
+  assert.equal(state.deferredWork.some((work) => work.action.id === 'other-deferred'), false)
+  await assert.rejects(() => service.reconsiderDeferredAction(userId, 'other-deferred'), /There is no deferred plan item/)
+  assert.equal(otherAction.status, 'deferred')
+  assert.equal(repository.planItems.find((item) => item.id === 'other-item')?.status, 'deferred')
 })

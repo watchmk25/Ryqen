@@ -83,6 +83,8 @@ export interface RyqenRepository {
   createDailyPlan(input: CreateDailyPlanInput): Promise<DailyPlan>
   updateDailyPlan(id: string, input: UpdateDailyPlanInput): Promise<DailyPlan>
   listPlanItems(dailyPlanId: string): Promise<PlanItem[]>
+  listPlanItemsForActionStatuses(userId: string, statuses: PlanItemStatus[]): Promise<PlanItem[]>
+  findPlanItemForActionStatus(userId: string, actionId: string, status: PlanItemStatus): Promise<PlanItem | null>
   createPlanItems(inputs: CreatePlanItemInput[]): Promise<PlanItem[]>
   updatePlanItem(id: string, input: UpdatePlanItemInput): Promise<PlanItem>
   createCapturedAction(input: CreateCapturedActionInput): Promise<Action>
@@ -254,6 +256,33 @@ export class SupabaseRyqenRepository implements RyqenRepository {
   async listPlanItems(dailyPlanId: string): Promise<PlanItem[]> {
     const result = await supabase.from('plan_items').select('*').eq('daily_plan_id', dailyPlanId).order('position', { ascending: true })
     return (unwrap(result.data, result.error, 'List plan items') as DatabaseRow[]).map(mapPlanItem)
+  }
+
+  async listPlanItemsForActionStatuses(userId: string, statuses: PlanItemStatus[]): Promise<PlanItem[]> {
+    if (statuses.length === 0) return []
+    // plan_items has no user_id of its own. The inner parent join keeps this
+    // ownership boundary explicit in addition to the table's RLS policy.
+    const result = await supabase
+      .from('plan_items')
+      .select('*, daily_plans!inner(user_id)')
+      .eq('daily_plans.user_id', userId)
+      .in('status', statuses)
+      .order('created_at', { ascending: false })
+    return (unwrap(result.data, result.error, 'List lifecycle plan items') as DatabaseRow[]).map(mapPlanItem)
+  }
+
+  async findPlanItemForActionStatus(userId: string, actionId: string, status: PlanItemStatus): Promise<PlanItem | null> {
+    const result = await supabase
+      .from('plan_items')
+      .select('*, daily_plans!inner(user_id)')
+      .eq('daily_plans.user_id', userId)
+      .eq('action_id', actionId)
+      .eq('status', status)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const data = unwrap(result.data, result.error, 'Find lifecycle plan item')
+    return data ? mapPlanItem(data as DatabaseRow) : null
   }
 
   async createPlanItems(inputs: CreatePlanItemInput[]): Promise<PlanItem[]> {

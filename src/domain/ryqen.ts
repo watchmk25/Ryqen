@@ -150,6 +150,24 @@ export interface PriorityAction {
   rationale: string
 }
 
+/**
+ * Persistent work that is currently underway. Its plan item supplies the
+ * lifecycle snapshot and persisted rationale, which may belong to an earlier
+ * daily plan when work crosses a local-day boundary.
+ */
+export interface ActiveWork extends PriorityAction {
+  planItem: PlanItem | null
+}
+
+/**
+ * Secondary persistent work explicitly deferred by the user. Like Active
+ * Work, its supporting plan item can belong to an earlier daily plan.
+ */
+export interface DeferredWork {
+  action: Action
+  planItem: PlanItem
+}
+
 export type TodayEmptyState =
   | 'no_pending_work'
   | 'no_work_fits_current_time'
@@ -160,11 +178,13 @@ export interface TodayPlanState {
   plan: DailyPlan | null
   planItems: PlanItem[]
   /**
-   * Work already underway in the current daily plan. Active work is kept
-   * separate from fresh recommendations so replanning never hides its
+   * Persistent work already underway. It is separate from fresh
+   * recommendations so replanning and local-day boundaries never hide its
    * lifecycle controls.
    */
-  activeWork: PriorityAction[]
+  activeWork: ActiveWork[]
+  /** Explicitly deferred persistent work, kept secondary and reconsiderable. */
+  deferredWork: DeferredWork[]
   priorities: PriorityAction[]
   actions: Action[]
   planningContext: PlanningContext

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow, EditModal } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type Action, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
+import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 
 type HomeTabProps = {
@@ -393,11 +393,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     applyTodayCheckIn,
   } = useTodayPlan(userId)
 
-  const deferredItems = state?.planItems
-    .filter((item) => item.status === 'deferred')
-    .map((item) => ({ item, action: state.actions.find((action) => action.id === item.actionId) }))
-    .filter((entry): entry is { item: PlanItem; action: Action } => entry.action !== undefined)
-    ?? []
+  const deferredItems = state?.deferredWork ?? []
   const completedCount = state?.planItems.filter((item) => item.status === 'completed').length ?? 0
   const rankColor = RANK_COLORS[rank] ?? C.accent
 
@@ -551,7 +547,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
             <PriorityCard
               key={priority.action.id}
               priority={priority}
-              planItem={state.planItems.find((item) => item.actionId === priority.action.id)}
+              planItem={priority.planItem ?? undefined}
               position={index + 1}
               variant="active"
               pending={pendingActionId === priority.action.id}
@@ -604,10 +600,10 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
             <Text style={T.footnote}>Deferred work ({deferredItems.length})</Text>
             <Text style={{ color: C.t2, fontSize: 12, fontWeight: '700' }}>{showDeferred ? 'Hide' : 'Show'}</Text>
           </TouchableOpacity>
-          {showDeferred && deferredItems.map(({ item, action }) => {
+          {showDeferred && deferredItems.map(({ planItem, action }) => {
             const pending = pendingActionId === action.id
             return (
-              <View key={item.id} style={{ backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View key={planItem.id} style={{ backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                 <View style={{ flex: 1 }}>
                   <Text style={T.subhead}>{action.title}</Text>
                   <Text style={[T.caption1, { marginTop: 3 }]}>Not in your immediate plan</Text>

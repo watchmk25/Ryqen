@@ -1,7 +1,7 @@
 import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities } from '../domain/planning'
 import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayCheckIn'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
-import type { PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
+import type { ActiveWork, DeferredWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
 
 export interface TodayCaptureResult {
@@ -16,23 +16,48 @@ function planDateFor(now: Date): string {
   return `${year}-${month}-${day}`
 }
 
-function activeWorkFor(planItems: PlanItem[], data: PlanningData): PriorityAction[] {
-  const actionsById = new Map(data.actions.map((action) => [action.id, action]))
+function latestPlanItemsByAction(planItems: PlanItem[]): Map<string, PlanItem> {
+  const latest = new Map<string, PlanItem>()
+  for (const planItem of planItems) {
+    const existing = latest.get(planItem.actionId)
+    if (!existing || planItem.createdAt > existing.createdAt || (planItem.createdAt === existing.createdAt && planItem.id > existing.id)) {
+      latest.set(planItem.actionId, planItem)
+    }
+  }
+  return latest
+}
 
-  return planItems.flatMap((planItem) => {
-    if (planItem.status !== 'in_progress') return []
-    const action = actionsById.get(planItem.actionId)
-    if (!action || action.status !== 'in_progress') return []
+function priorityForAction(action: PlanningData['actions'][number], planItem: PlanItem | null, data: PlanningData): PriorityAction {
+  return {
+    action,
+    task: action.taskId ? data.tasks.find((task) => task.id === action.taskId) ?? null : null,
+    project: action.projectId ? data.projects.find((project) => project.id === action.projectId) ?? null : null,
+    goal: action.goalId ? data.goals.find((goal) => goal.id === action.goalId) ?? null : null,
+    estimatedMinutes: planItem?.estimatedMinutes ?? action.estimatedMinutes ?? 30,
+    priorityScore: planItem?.priorityScore ?? 0,
+    rationale: planItem?.rationale ?? 'Already in progress',
+  }
+}
 
-    return [{
-      action,
-      task: action.taskId ? data.tasks.find((task) => task.id === action.taskId) ?? null : null,
-      project: action.projectId ? data.projects.find((project) => project.id === action.projectId) ?? null : null,
-      goal: action.goalId ? data.goals.find((goal) => goal.id === action.goalId) ?? null : null,
-      estimatedMinutes: planItem.estimatedMinutes ?? action.estimatedMinutes ?? 30,
-      priorityScore: planItem.priorityScore,
-      rationale: planItem.rationale ?? 'Already in progress',
-    }]
+function activeWorkFor(planItems: PlanItem[], data: PlanningData): ActiveWork[] {
+  const latestByAction = latestPlanItemsByAction(planItems.filter((planItem) => planItem.status === 'in_progress'))
+
+  return data.actions.flatMap((action) => {
+    if (action.status !== 'in_progress') return []
+    const planItem = latestByAction.get(action.id) ?? null
+    // Actions are loaded for this authenticated user. Preserve active work
+    // even if a parent changes after Start so it can be resolved, as in the
+    // existing same-day lifecycle.
+    return [{ ...priorityForAction(action, planItem, data), planItem }]
+  })
+}
+
+function deferredWorkFor(planItems: PlanItem[], data: PlanningData): DeferredWork[] {
+  const latestByAction = latestPlanItemsByAction(planItems.filter((planItem) => planItem.status === 'deferred'))
+  return data.actions.flatMap((action) => {
+    if (action.status !== 'deferred') return []
+    const planItem = latestByAction.get(action.id)
+    return planItem ? [{ action, planItem }] : []
   })
 }
 
@@ -57,6 +82,9 @@ export class TodayService {
       .filter((action) => action.status === 'in_progress')
       .map((action) => action.id)
     const priorities = selectTodayPriorities(data, planningContext, activeActionIds, now)
+    const lifecyclePlanItems = await this.repository.listPlanItemsForActionStatuses(userId, ['in_progress', 'deferred'])
+    const activeWork = activeWorkFor(lifecyclePlanItems, data)
+    const deferredWork = deferredWorkFor(lifecyclePlanItems, data)
     let plan = await this.repository.findDailyPlan(userId, planDate)
 
     if (!plan) {
@@ -64,11 +92,12 @@ export class TodayService {
         return {
           plan: null,
           planItems: [],
-          activeWork: [],
+          activeWork,
+          deferredWork,
           priorities: [],
           actions: data.actions,
           planningContext,
-          emptyState: deriveTodayEmptyState(data, planningContext, { excludedActionIds: activeActionIds }, now),
+          emptyState: deriveTodayEmptyState(data, planningContext, { excludedActionIds: activeActionIds, hasActiveWork: activeWork.length > 0 }, now),
         }
       }
       try {
@@ -92,7 +121,6 @@ export class TodayService {
     const excludedActionIds = existingPlanItems
       .filter((item) => item.status === 'skipped')
       .map((item) => item.actionId)
-    const activeWork = activeWorkFor(existingPlanItems, data)
     const currentPriorities = selectTodayPriorities(
       data,
       planningContext,
@@ -138,6 +166,7 @@ export class TodayService {
       plan,
       planItems: await this.repository.listPlanItems(plan.id),
       activeWork,
+      deferredWork,
       priorities: currentPriorities,
       actions: data.actions,
       planningContext,
@@ -165,16 +194,21 @@ export class TodayService {
   }
 
   async completeAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    const state = await this.planToday(userId, now)
-    if (!state.plan) throw new Error('There is no active Today plan for this action')
-    await this.repository.completeTodayAction(state.plan.id, actionId)
+    await this.planToday(userId, now)
+    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
+    if (!planItem) throw new Error('There is no in-progress plan item for this action')
+    await this.repository.completeTodayAction(planItem.dailyPlanId, actionId)
     return this.planToday(userId, now)
   }
 
   async deferAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
     const state = await this.planToday(userId, now)
-    if (!state.plan) throw new Error('There is no active Today plan for this action')
-    await this.repository.deferTodayAction(state.plan.id, actionId)
+    const action = state.actions.find((item) => item.id === actionId)
+    const planItem = action?.status === 'in_progress'
+      ? await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
+      : state.planItems.find((item) => item.actionId === actionId && item.status === 'pending') ?? null
+    if (!planItem) throw new Error('There is no deferrable Today plan item for this action')
+    await this.repository.deferTodayAction(planItem.dailyPlanId, actionId)
     return this.planToday(userId, now)
   }
 
@@ -186,10 +220,9 @@ export class TodayService {
   }
 
   async reconsiderDeferredAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    const planDate = planDateFor(now)
-    const plan = await this.repository.findDailyPlan(userId, planDate)
-    if (!plan) throw new Error('There is no Today plan to reconsider')
-    await this.repository.reconsiderTodayAction(plan.id, actionId)
+    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'deferred')
+    if (!planItem) throw new Error('There is no deferred plan item for this action')
+    await this.repository.reconsiderTodayAction(planItem.dailyPlanId, actionId)
     return this.planToday(userId, now)
   }
 }
