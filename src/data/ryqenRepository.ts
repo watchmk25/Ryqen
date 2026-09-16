@@ -34,22 +34,18 @@ export interface UpdateDailyPlanInput {
   generatedAt?: string
 }
 
-export interface CreatePlanItemInput {
-  dailyPlanId: string
+export interface ReconcileTodayPlanItemInput {
   actionId: string
   position: number
   priorityScore: number
   rationale: string
   estimatedMinutes: number
-  status: PlanItemStatus
 }
 
-export interface UpdatePlanItemInput {
-  position?: number
-  priorityScore?: number
-  rationale?: string
-  estimatedMinutes?: number
-  status?: PlanItemStatus
+export interface ReconcileTodayPlanInput {
+  dailyPlanId: string
+  planDate: string
+  items: ReconcileTodayPlanItemInput[]
 }
 
 export interface TodayActionMutationResult {
@@ -85,8 +81,7 @@ export interface RyqenRepository {
   listPlanItems(dailyPlanId: string): Promise<PlanItem[]>
   listPlanItemsForActionStatuses(userId: string, statuses: PlanItemStatus[]): Promise<PlanItem[]>
   findPlanItemForActionStatus(userId: string, actionId: string, status: PlanItemStatus): Promise<PlanItem | null>
-  createPlanItems(inputs: CreatePlanItemInput[]): Promise<PlanItem[]>
-  updatePlanItem(id: string, input: UpdatePlanItemInput): Promise<PlanItem>
+  reconcileTodayPlan(input: ReconcileTodayPlanInput): Promise<void>
   createCapturedAction(input: CreateCapturedActionInput): Promise<Action>
   startTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   completeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
@@ -285,24 +280,19 @@ export class SupabaseRyqenRepository implements RyqenRepository {
     return data ? mapPlanItem(data as DatabaseRow) : null
   }
 
-  async createPlanItems(inputs: CreatePlanItemInput[]): Promise<PlanItem[]> {
-    if (inputs.length === 0) return []
-    const result = await supabase.from('plan_items').upsert(inputs.map((input) => ({
-      daily_plan_id: input.dailyPlanId, action_id: input.actionId, position: input.position,
-      priority_score: input.priorityScore, rationale: input.rationale, estimated_minutes: input.estimatedMinutes, status: input.status,
-    })), { onConflict: 'daily_plan_id,action_id', ignoreDuplicates: true }).select('*')
-    return (unwrap(result.data, result.error, 'Create plan items') as DatabaseRow[]).map(mapPlanItem)
-  }
-
-  async updatePlanItem(id: string, input: UpdatePlanItemInput): Promise<PlanItem> {
-    const values: Record<string, unknown> = {}
-    if (input.position !== undefined) values.position = input.position
-    if (input.priorityScore !== undefined) values.priority_score = input.priorityScore
-    if (input.rationale !== undefined) values.rationale = input.rationale
-    if (input.estimatedMinutes !== undefined) values.estimated_minutes = input.estimatedMinutes
-    if (input.status !== undefined) values.status = input.status
-    const result = await supabase.from('plan_items').update(values).eq('id', id).select('*').single()
-    return mapPlanItem(unwrap(result.data, result.error, 'Update plan item') as DatabaseRow)
+  async reconcileTodayPlan(input: ReconcileTodayPlanInput): Promise<void> {
+    const result = await supabase.rpc('ryqen_reconcile_today_plan', {
+      p_daily_plan_id: input.dailyPlanId,
+      p_plan_date: input.planDate,
+      p_items: input.items.map((item) => ({
+        action_id: item.actionId,
+        position: item.position,
+        priority_score: item.priorityScore,
+        rationale: item.rationale,
+        estimated_minutes: item.estimatedMinutes,
+      })),
+    })
+    unwrap(result.data, result.error, 'Reconcile Today plan')
   }
 
   async createCapturedAction(input: CreateCapturedActionInput): Promise<Action> {

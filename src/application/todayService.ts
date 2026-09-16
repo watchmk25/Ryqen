@@ -133,34 +133,17 @@ export class TodayService {
       { excludedActionIds: [...excludedActionIds, ...activeActionIds], hasActiveWork: activeWork.length > 0 },
       now,
     )
-    const existingByAction = new Map(existingPlanItems.map((item) => [item.actionId, item]))
-    const newItems = []
-    const selectedActionIds = new Set(currentPriorities.map((priority) => priority.action.id))
-
-    for (const [index, priority] of currentPriorities.entries()) {
-      const existing = existingByAction.get(priority.action.id)
-      const input = {
+    await this.repository.reconcileTodayPlan({
+      dailyPlanId: plan.id,
+      planDate: plan.planDate,
+      items: currentPriorities.map((priority, index) => ({
+        actionId: priority.action.id,
         position: index + 1,
         priorityScore: priority.priorityScore,
         rationale: priority.rationale,
         estimatedMinutes: priority.estimatedMinutes,
-      }
-      if (existing && (existing.status === 'pending' || existing.status === 'in_progress')) {
-        await this.repository.updatePlanItem(existing.id, input)
-      } else if (existing?.status === 'replaced') {
-        await this.repository.updatePlanItem(existing.id, { ...input, status: 'pending' })
-      } else if (!existing) {
-        newItems.push({ dailyPlanId: plan.id, actionId: priority.action.id, ...input, status: 'pending' as const })
-      }
-    }
-
-    for (const planItem of existingPlanItems) {
-      if (planItem.status === 'pending' && !selectedActionIds.has(planItem.actionId)) {
-        await this.repository.updatePlanItem(planItem.id, { status: 'replaced' })
-      }
-    }
-
-    if (newItems.length > 0) await this.repository.createPlanItems(newItems)
+      })),
+    })
 
     return {
       plan,

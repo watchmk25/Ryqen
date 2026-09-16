@@ -68,17 +68,27 @@ class MemoryRyqenRepository {
     const items = await this.listPlanItemsForActionStatuses(ownerId, [status])
     return items.find((item) => item.actionId === actionId) ?? null
   }
-  async createPlanItems(inputs) {
-    const items = inputs
-      .filter((input) => !this.planItems.some((item) => item.dailyPlanId === input.dailyPlanId && item.actionId === input.actionId))
-      .map((input) => ({ id: this.nextId('item'), ...input, createdAt: now.toISOString() }))
-    this.planItems.push(...items)
-    return this.clone(items)
-  }
-  async updatePlanItem(id, input) {
-    const item = this.planItems.find((candidate) => candidate.id === id)
-    Object.assign(item, input)
-    return this.clone(item)
+  async reconcileTodayPlan(input) {
+    const plan = this.plans.find((candidate) => candidate.id === input.dailyPlanId && candidate.planDate === input.planDate && candidate.status === 'active')
+    if (!plan || input.items.length > 3 || new Set(input.items.map((item) => item.actionId)).size !== input.items.length) {
+      throw new Error('Invalid planner reconciliation')
+    }
+    for (const [index, item] of input.items.entries()) {
+      const action = this.data.actions.find((candidate) => candidate.id === item.actionId && candidate.userId === plan.userId)
+      if (!action || item.position !== index + 1 || item.position > 3 || item.priorityScore < 0 || item.estimatedMinutes < 1) {
+        throw new Error('Invalid planner reconciliation')
+      }
+      const existing = this.planItems.find((candidate) => candidate.dailyPlanId === plan.id && candidate.actionId === item.actionId)
+      if (!existing) {
+        this.planItems.push({ id: this.nextId('item'), dailyPlanId: plan.id, ...item, status: 'pending', createdAt: now.toISOString() })
+      } else if (existing.status === 'pending' || existing.status === 'replaced') {
+        Object.assign(existing, item, { status: 'pending' })
+      }
+    }
+    const selected = new Set(input.items.map((item) => item.actionId))
+    for (const item of this.planItems) {
+      if (item.dailyPlanId === plan.id && item.status === 'pending' && !selected.has(item.actionId)) item.status = 'replaced'
+    }
   }
   async createCapturedAction(input) {
     this.captureInputs.push(this.clone(input))
@@ -274,10 +284,11 @@ test('plan-item persistence preserves one item per action and plan', async () =>
   const service = new TodayService(repository)
 
   const state = await service.planToday(userId, now)
-  await repository.createPlanItems([{
-    dailyPlanId: state.plan.id, actionId: 'action-1', position: 1, priorityScore: 10,
-    rationale: 'Duplicate attempt', estimatedMinutes: 15, status: 'pending',
-  }])
+  await repository.reconcileTodayPlan({
+    dailyPlanId: state.plan.id,
+    planDate: state.plan.planDate,
+    items: [{ actionId: 'action-1', position: 1, priorityScore: 10, rationale: 'Duplicate attempt', estimatedMinutes: 15 }],
+  })
 
   assert.equal(repository.planItems.length, 1)
 })
