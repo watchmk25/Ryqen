@@ -16,14 +16,14 @@ The core V0.1 experience is the **Today Command Center**, powered by an adaptive
 - Goal/context-driven rather than rigid feature categories.
 - Optimize meaningful progress and reduced friction.
 - Proactive but restrained.
-- Unified intelligence with specialized AI/tools behind the scenes.
+- Unified intelligence with specialized AI/tools available as future capabilities.
 - User control, honesty, safety, privacy, respect, and autonomy remain fundamental.
 - Goals, Projects, Tasks, and Actions are distinct; standalone Actions are allowed.
 - Prioritization considers importance, urgency, goal impact, effort, available time, capacity, dependencies, and preferences.
 - Prioritization should be explainable.
-- AI is primarily a reasoning/personalization layer in V0.1.
-- AI output must be structured and validated.
-- Start with one primary AI provider while preserving a provider abstraction.
+- Current V0.1 Today planning is deterministic and does not depend on AI.
+- A future AI reasoning/personalization layer must produce structured, validated proposals.
+- Preserve a provider abstraction for that future layer without making a provider a V0.1 runtime dependency.
 - Meaningful actions require appropriate authentication, authorization, validation, verification, and auditing.
 
 ## 3. Core Architecture
@@ -36,9 +36,9 @@ Context + Goals + Projects + Tasks/Actions
   |
   v
 Planning Engine
-  |   |  \-- Deterministic business rules
+  |   |  \-- Deterministic business rules (current V0.1)
   |
-  \---- AI reasoning/personalization
+  \---- Future AI reasoning/personalization
   |
   v
 Adaptive Daily Plan
@@ -80,7 +80,7 @@ Owns Supabase access, persistence, queries, transactions, and mapping database r
 
 ### AI
 
-Handles reasoning, personalization, interpretation, structured recommendations, and explanations.
+Reserved for future reasoning, personalization, interpretation, structured recommendations, and explanations. It is not required for the current V0.1 Today planner.
 
 **AI never directly mutates important application state.**
 
@@ -116,7 +116,7 @@ A meaningful piece of work that may contain one or more Actions.
 A concrete next step. Actions may exist independently.
 
 ### Daily Plan
-The adaptive set of recommended work/actions for the current circumstances.
+The adaptive, date-scoped snapshot of recommended work/actions for the current circumstances. Persistent Actions remain the source of lifecycle truth; cross-day Active Work and Deferred Work may use historical Plan Items only as validated lifecycle/audit anchors.
 
 ### Activity / Progress
 Durable records of meaningful completed work or progress.
@@ -141,18 +141,16 @@ It should explain recommendations, for example:
 
 > Recommended first because it has high goal impact, is time-sensitive, and fits the available time.
 
-The preferred pipeline is:
+The current V0.1 pipeline is:
 
 ```text
 Context
  -> deterministic preparation
- -> AI reasoning
- -> structured recommendation
- -> deterministic validation
+ -> deterministic priority selection and explanation
  -> Daily Plan
 ```
 
-AI handles ambiguity and personalization; deterministic code enforces hard constraints and state integrity.
+Future AI may handle ambiguity and personalization through a structured proposal that deterministic code validates before it affects a plan. Deterministic code continues to enforce hard constraints and state integrity.
 
 ## 7. Today Command Center
 
@@ -166,9 +164,9 @@ It should adapt to circumstances rather than forcing users through fixed feature
 
 The interface should remain calm and focused. Ryqen should not maximize cards, notifications, metrics, quests, or activity.
 
-## 8. AI Provider Strategy
+## 8. Future AI Provider Strategy
 
-V0.1 uses one primary reasoning provider.
+Current V0.1 does not invoke an AI provider for Today planning. The following provider direction is retained for a later, separately approved reasoning/personalization layer.
 
 Internally, use an abstraction such as:
 
@@ -189,7 +187,29 @@ Supabase Auth remains the V0.1 authentication foundation.
 
 Supabase Row Level Security should enforce user ownership.
 
-Important state transitions must be validated independently of UI and AI input.
+Important state transitions are validated independently of UI and future AI input.
+
+### Implemented Today lifecycle boundary
+
+Meaningful Today lifecycle mutations use protected Supabase RPC boundaries. Those functions authenticate through `auth.uid()`, explicitly verify record ownership, validate the expected state transition, perform related writes atomically, and record lifecycle Activities atomically where the transition requires them.
+
+Authenticated clients cannot directly write Activities or mutate Plan Items. Direct Action updates are limited to ordinary planning fields; lifecycle fields such as Action status and `started_at` remain RPC-controlled. The protected functions are `SECURITY DEFINER`, run with an empty `search_path`, and retain explicit `auth.uid()` and ownership checks rather than relying on definer privileges or RLS as the authorization decision.
+
+### Today lifecycle/reconciliation lock order
+
+Within the implemented Today lifecycle and reconciliation paths, overlapping rows are acquired in this order:
+
+```text
+Action -> Daily Plan -> Plan Item
+```
+
+This shared order avoids the Action/Daily Plan lock-order inversion that could otherwise produce a PostgreSQL deadlock. It is a scoped invariant for these Today paths, not a general database-wide locking rule.
+
+### Reconciliation eligibility boundary
+
+The deterministic planner remains responsible for context-driven exclusions, time/capacity fit, ranking, and selecting at most three fresh recommendations. The reconciliation RPC enforces only the persistent eligibility boundary for a pending Plan Item: the Action belongs to the authenticated user and is `pending`; a linked Task is `pending` or `in_progress`; and relevant direct, Task-derived, or Project-derived Projects and Goals are `active`.
+
+Reconciliation cannot use an invalid lifecycle Action to create a fresh pending snapshot and does not create Activities.
 
 Capabilities affecting external systems, user data, or important state require explicit permission boundaries.
 
@@ -201,7 +221,7 @@ The existing Supabase schema is a working foundation, not the final Ryqen domain
 
 The current schema is strongly influenced by the previous Hunter/quest product and must not dictate the new architecture.
 
-The target model should introduce structures for:
+The V0.1 model now includes structures for:
 
 - goals
 - projects
@@ -212,7 +232,7 @@ The target model should introduce structures for:
 - plan items
 - activity/progress
 
-The exact relational schema belongs in the next design phase.
+The approved relational details are documented in `RYQEN_V0.1_DATA_MODEL.md` and incremental Supabase migrations. Future model changes remain subject to the same additive, reviewed migration discipline.
 
 Important historical values should not rely solely on mutable aggregates. For example, progression/XP should eventually use an event/ledger approach rather than reconstructing lifetime XP from today's quests.
 

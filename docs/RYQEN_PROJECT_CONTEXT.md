@@ -2,7 +2,7 @@
 
 **Version:** 0.1 working context
 **Purpose:** Portable source of truth for the Ryqen project
-**Last updated:** 2026-09-12
+**Last updated:** 2026-09-16
 
 > This file is the durable project context. Chat history and AI memory are helpful, but this document should be kept with the codebase and updated when major decisions change.
 
@@ -104,7 +104,7 @@ Standalone Actions are allowed. Users should not have to manually construct the 
 Ryqen should prioritize actions using importance, urgency, goal impact, effort, available time, current capacity, dependencies, and user preferences. Recommendations should be explainable in ordinary language. Ryqen may recommend doing less when that is genuinely the best choice.
 
 ### Decision 17 — AI as reasoning/personalization layer
-In V0.1, AI primarily serves as the reasoning and personalization layer behind planning. AI outputs must be structured, validated, and bounded by deterministic rules.
+The current V0.1 Today planner is deterministic and does not depend on AI. A future AI reasoning/personalization layer may assist only through structured, validated proposals bounded by deterministic rules.
 
 AI must not rewrite reality: AI claims are not proof that an action happened.
 
@@ -194,10 +194,10 @@ The engineering audit found:
 - Current XP logic is unsafe: quest toggling can overwrite lifetime XP with only today's completed-quest XP.
 - Focus XP has a stale-state/race problem.
 - There is no XP event ledger or server-authoritative award operation yet.
-- Database schema/migrations were previously absent from the repository; the current remote baseline has now been pulled into `supabase/migrations/20260912114530_remote_schema.sql`.
-- The current backend uses RLS ownership policies, but progression integrity still needs server-side controls.
+- The repository now contains the remote baseline plus additive V0.1 Supabase migrations for the Ryqen core model, Today integrity, Work Capture/effort/elapsed time, lifecycle hardening, lock ordering, and reconciliation eligibility.
+- RLS enforces user ownership. Meaningful Today lifecycle changes are protected by server-side RPCs with explicit authentication, ownership, transition validation, atomic Activity writes where applicable, and restricted direct client mutation paths. Progression/XP integrity remains a separate legacy concern.
 - Existing rank definitions conflict and rank does not currently progress correctly.
-- Automated tests and CI are not yet established.
+- Focused domain, service, and local Supabase integration tests are established. CI has not been established as part of this V0.1 work.
 
 Do not redesign the entire app. Evolve it carefully.
 
@@ -239,7 +239,15 @@ Never let a coding AI silently become the product decision-maker.
 
 ---
 
-## 10. Immediate next milestone
+## 10. Current V0.1 stabilization status
+
+The V0.1 Today Command Center, deterministic planning loop, Work Capture, Today context check-in, cross-day work continuity, and lifecycle integrity/security boundaries are implemented incrementally on the existing app.
+
+Daily Plans and Plan Items are date-scoped snapshots; persistent Actions remain the lifecycle source of truth. Active and Deferred work can use historical Plan Items as validated lifecycle anchors across days. The Today lifecycle/reconciliation paths use the scoped lock order `Action -> Daily Plan -> Plan Item`, and reconciliation enforces persistent Action/parent eligibility without duplicating context-driven ranking or selection in the database.
+
+The legacy Hunter ability assessment remains non-blocking for an authenticated user who has completed onboarding. Existing Hunter data and profile editing remain preserved for legacy/personalization use.
+
+## 11. Historical next milestone (2026-09-12)
 
 The Constitution is directionally approved and Decisions 1–20 are approved.
 
@@ -257,7 +265,7 @@ Only after those are clear should Codex implement the foundation changes.
 
 ---
 
-## 11. Context preservation rule
+## 12. Context preservation rule
 
 This file should be committed to the Ryqen repository and treated as a canonical project context document.
 

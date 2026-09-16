@@ -60,6 +60,8 @@ Example rationale:
 
 ## 5. Deterministic Logic vs AI
 
+Current V0.1 Today planning is deterministic and operates without an AI provider. AI remains a future, separately approved reasoning/personalization capability; it is not a prerequisite for planning, replanning, or lifecycle actions.
+
 **Deterministic application/domain logic owns:**
 
 -   validation
@@ -114,6 +116,11 @@ Normal new-day planning preserves previous plans and plan items. An explicit
 lifecycle operation may update its original plan item when that item is the
 validated audit anchor for the action transition.
 
+Planner reconciliation can create or restore only a valid fresh pending Plan
+Item snapshot. It cannot turn a completed, deferred, or cancelled Action, or
+an Action made ineligible by a blocked or non-actionable parent, into a
+pending recommendation.
+
 ## 7. Action Lifecycle
 
 ``` text
@@ -124,6 +131,12 @@ in_progress → deferred
 ```
 
 Transitions must be validated by application/domain logic.
+
+Meaningful Today lifecycle transitions are executed through protected,
+server-validated RPCs. These operations verify the authenticated owner,
+validate state, update related Action/Plan Item state atomically, and record
+required Activities atomically. Authenticated clients do not directly mutate
+Plan Items or Activities.
 
 ## 8. User Interactions
 
