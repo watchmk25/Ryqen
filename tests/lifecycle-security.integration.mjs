@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import test from 'node:test'
 
 const runLocalIntegration = process.env.RYQEN_RUN_LOCAL_SUPABASE_INTEGRATION === '1'
@@ -10,6 +10,57 @@ function runSql(sql) {
     ['exec', '-i', 'supabase_db_Ryqen', 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1'],
     { input: sql, encoding: 'utf8' },
   )
+}
+
+function startSql(sql, readyMarker = null) {
+  let resolveReady
+  let rejectReady
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve
+    rejectReady = reject
+  })
+  const child = spawn('docker', [
+    'exec', '-i', 'supabase_db_Ryqen', 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1',
+  ])
+  let output = ''
+  let readySeen = false
+  child.stdout.on('data', (chunk) => {
+    output += chunk.toString()
+    if (readyMarker && !readySeen && output.includes(readyMarker)) {
+      readySeen = true
+      resolveReady()
+    }
+  })
+  child.stderr.on('data', (chunk) => {
+    output += chunk.toString()
+  })
+  const completed = new Promise((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (readyMarker && !readySeen) rejectReady(new Error(`SQL process exited before ${readyMarker}: ${output}`))
+      if (code === 0) resolve(output)
+      else reject(new Error(`SQL process exited with ${code}: ${output}`))
+    })
+  })
+  child.stdin.end(sql)
+  return { ready, completed }
+}
+
+function runSqlAsync(sql) {
+  return startSql(sql).completed
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function waitForDatabaseMarker(sql, marker, timeoutMilliseconds = 3000) {
+  const deadline = Date.now() + timeoutMilliseconds
+  while (Date.now() < deadline) {
+    if (runSql(sql).includes(marker)) return
+    await wait(25)
+  }
+  throw new Error(`Timed out waiting for database marker: ${marker}`)
 }
 
 test('local Supabase lifecycle hardening enforces client boundaries and preserves RPC workflows', { skip: !runLocalIntegration }, () => {
@@ -289,4 +340,88 @@ ROLLBACK;
 `)
 
   assert.match(output, /ROLLBACK/)
+})
+
+test('local Supabase reconciliation and lifecycle mutations share the Action → Daily Plan → Plan Item lock order', { skip: !runLocalIntegration }, async () => {
+  const userId = '10000000-0000-0000-0000-000000000010'
+  const planId = '20000000-0000-0000-0000-000000000010'
+  const actionId = '30000000-0000-0000-0000-000000000010'
+
+  const cleanup = () => runSql(`
+DELETE FROM public.daily_plans WHERE id = '${planId}';
+DELETE FROM public.actions WHERE id = '${actionId}';
+DELETE FROM auth.users WHERE id = '${userId}';
+`)
+
+  cleanup()
+  try {
+    runSql(`
+INSERT INTO auth.users (id, aud, role, email, encrypted_password, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+VALUES ('${userId}', 'authenticated', 'authenticated', 'lock-order@example.test', 'not-used', '{}'::jsonb, '{}'::jsonb, now(), now());
+INSERT INTO public.daily_plans (id, user_id, plan_date, status, context_snapshot, generated_at)
+VALUES ('${planId}', '${userId}', current_date, 'active', '{}'::jsonb, now());
+INSERT INTO public.actions (id, user_id, title, status, importance, estimated_minutes)
+VALUES ('${actionId}', '${userId}', 'Concurrent lifecycle work', 'pending', 3, 15);
+INSERT INTO public.plan_items (daily_plan_id, action_id, position, priority_score, rationale, estimated_minutes, status)
+VALUES ('${planId}', '${actionId}', 1, 1, 'Concurrent planner snapshot', 15, 'pending');
+`)
+
+    // Hold the plan first. Reconciliation starts first and therefore takes
+    // the Action lock before queueing for this plan. Skip then waits on that
+    // Action lock. With the former Plan → Action reconciliation order this
+    // exact interleaving produced a PostgreSQL deadlock after the plan lock
+    // was released; with the shared order both operations complete.
+    const planLock = startSql(`
+BEGIN;
+SELECT 'plan_lock_held' FROM public.daily_plans WHERE id = '${planId}' FOR UPDATE;
+SELECT pg_sleep(1);
+COMMIT;
+`, 'plan_lock_held')
+    await planLock.ready
+
+    const reconcile = runSqlAsync(`
+BEGIN;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '5s';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${userId}', true);
+SELECT public.ryqen_reconcile_today_plan(
+  '${planId}', current_date,
+  jsonb_build_array(jsonb_build_object(
+    'action_id', '${actionId}',
+    'position', 1,
+    'priority_score', 1,
+    'rationale', 'Concurrent planner snapshot',
+    'estimated_minutes', 15
+  ))
+);
+COMMIT;
+`)
+    await waitForDatabaseMarker(`
+SELECT CASE WHEN EXISTS (
+  SELECT 1
+  FROM pg_stat_activity
+  WHERE query LIKE '%ryqen_reconcile_today_plan%'
+    AND wait_event_type = 'Lock'
+) THEN 'reconciliation_waiting_for_plan' ELSE 'not_ready' END;
+`, 'reconciliation_waiting_for_plan')
+    const skip = runSqlAsync(`
+BEGIN;
+SET LOCAL lock_timeout = '3s';
+SET LOCAL statement_timeout = '5s';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${userId}', true);
+SELECT public.ryqen_skip_today_plan_item('${planId}', '${actionId}');
+COMMIT;
+`)
+
+    await Promise.all([planLock.completed, reconcile, skip])
+    const result = runSql(`
+SELECT (SELECT status FROM public.actions WHERE id = '${actionId}') AS action_status,
+       (SELECT status FROM public.plan_items WHERE daily_plan_id = '${planId}' AND action_id = '${actionId}') AS plan_item_status;
+`)
+    assert.match(result, /pending\s+\| skipped/)
+  } finally {
+    cleanup()
+  }
 })
