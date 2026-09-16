@@ -76,6 +76,12 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const actionReconsider = '30000000-0000-0000-0000-000000000005'
   const actionReplace = '30000000-0000-0000-0000-000000000006'
   const overnightAction = '30000000-0000-0000-0000-000000000007'
+  const blockedTaskAction = '30000000-0000-0000-0000-000000000008'
+  const pausedProjectAction = '30000000-0000-0000-0000-000000000009'
+  const pausedGoalAction = '30000000-0000-0000-0000-000000000010'
+  const blockedTask = '60000000-0000-0000-0000-000000000001'
+  const pausedProject = '60000000-0000-0000-0000-000000000002'
+  const pausedGoal = '60000000-0000-0000-0000-000000000003'
   const itemA = '40000000-0000-0000-0000-000000000001'
   const itemB = '40000000-0000-0000-0000-000000000002'
   const itemDefer = '40000000-0000-0000-0000-000000000003'
@@ -99,6 +105,13 @@ VALUES
   ('${planB}', '${userB}', current_date, 'active', '{}'::jsonb, now()),
   ('${historicalPlan}', '${userA}', current_date - 1, 'active', '{}'::jsonb, now());
 
+INSERT INTO public.goals (id, user_id, title, status, importance)
+VALUES ('${pausedGoal}', '${userA}', 'Paused goal', 'paused', 3);
+INSERT INTO public.projects (id, user_id, title, status, importance)
+VALUES ('${pausedProject}', '${userA}', 'Paused project', 'paused', 3);
+INSERT INTO public.tasks (id, user_id, title, status, importance, urgency)
+VALUES ('${blockedTask}', '${userA}', 'Blocked task', 'blocked', 3, 3);
+
 INSERT INTO public.actions (id, user_id, title, status, importance, estimated_minutes)
 VALUES
   ('${actionA}', '${userA}', 'Start and complete', 'pending', 3, 15),
@@ -107,7 +120,14 @@ VALUES
   ('${actionSkip}', '${userA}', 'Skip', 'pending', 3, 15),
   ('${actionReconsider}', '${userA}', 'Reconsider', 'deferred', 3, 15),
   ('${actionReplace}', '${userA}', 'Replacement candidate', 'pending', 3, 15),
-  ('${overnightAction}', '${userA}', 'Overnight work', 'in_progress', 3, 15);
+  ('${overnightAction}', '${userA}', 'Overnight work', 'in_progress', 3, 15),
+  ('${blockedTaskAction}', '${userA}', 'Blocked parent', 'pending', 3, 15),
+  ('${pausedProjectAction}', '${userA}', 'Paused project parent', 'pending', 3, 15),
+  ('${pausedGoalAction}', '${userA}', 'Paused goal parent', 'pending', 3, 15);
+
+UPDATE public.actions SET task_id = '${blockedTask}' WHERE id = '${blockedTaskAction}';
+UPDATE public.actions SET project_id = '${pausedProject}' WHERE id = '${pausedProjectAction}';
+UPDATE public.actions SET goal_id = '${pausedGoal}' WHERE id = '${pausedGoalAction}';
 
 INSERT INTO public.plan_items (id, daily_plan_id, action_id, position, priority_score, rationale, estimated_minutes, status)
 VALUES
@@ -241,6 +261,65 @@ END;
 $$;
 SELECT public.ryqen_complete_today_action('${planA}', '${actionA}');
 SELECT public.ryqen_defer_today_action('${planA}', '${actionDefer}');
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.ryqen_reconcile_today_plan(
+      '${planA}', current_date,
+      jsonb_build_array(jsonb_build_object('action_id', '${actionA}', 'position', 1, 'priority_score', 1, 'rationale', 'Invalid', 'estimated_minutes', 15))
+    );
+    RAISE EXCEPTION 'completed Action reconciliation unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_reconcile_today_plan(
+      '${planA}', current_date,
+      jsonb_build_array(jsonb_build_object('action_id', '${actionDefer}', 'position', 1, 'priority_score', 1, 'rationale', 'Invalid', 'estimated_minutes', 15))
+    );
+    RAISE EXCEPTION 'deferred Action reconciliation unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_reconcile_today_plan(
+      '${planA}', current_date,
+      jsonb_build_array(jsonb_build_object('action_id', '${actionB}', 'position', 1, 'priority_score', 1, 'rationale', 'Cross user', 'estimated_minutes', 15))
+    );
+    RAISE EXCEPTION 'cross-user Action reconciliation unexpectedly succeeded';
+  EXCEPTION WHEN no_data_found THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_reconcile_today_plan(
+      '${planA}', current_date,
+      jsonb_build_array(jsonb_build_object('action_id', '${blockedTaskAction}', 'position', 1, 'priority_score', 1, 'rationale', 'Invalid', 'estimated_minutes', 15))
+    );
+    RAISE EXCEPTION 'blocked Task reconciliation unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_reconcile_today_plan(
+      '${planA}', current_date,
+      jsonb_build_array(jsonb_build_object('action_id', '${pausedProjectAction}', 'position', 1, 'priority_score', 1, 'rationale', 'Invalid', 'estimated_minutes', 15))
+    );
+    RAISE EXCEPTION 'paused Project reconciliation unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_reconcile_today_plan(
+      '${planA}', current_date,
+      jsonb_build_array(jsonb_build_object('action_id', '${pausedGoalAction}', 'position', 1, 'priority_score', 1, 'rationale', 'Invalid', 'estimated_minutes', 15))
+    );
+    RAISE EXCEPTION 'paused Goal reconciliation unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  IF EXISTS (
+    SELECT 1 FROM public.plan_items
+    WHERE daily_plan_id = '${planA}'
+      AND action_id IN ('${blockedTaskAction}', '${pausedProjectAction}', '${pausedGoalAction}')
+  ) THEN
+    RAISE EXCEPTION 'ineligible parent Action created a Plan Item';
+  END IF;
+END;
+$$;
 SELECT public.ryqen_skip_today_plan_item('${planA}', '${actionSkip}');
 SELECT public.ryqen_reconsider_today_action('${planA}', '${actionReconsider}');
 SELECT public.ryqen_capture_action('  Captured safely  ', 4::smallint, NULL::timestamptz, 30);
@@ -265,6 +344,33 @@ BEGIN
     OR (SELECT status FROM public.actions WHERE id = '${actionSkip}') <> 'pending'
     OR (SELECT count(*) FROM public.actions WHERE title = 'Captured safely' AND user_id = '${userA}' AND status = 'pending') <> 1 THEN
     RAISE EXCEPTION 'RPC lifecycle or planner reconciliation invariant failed';
+  END IF;
+END;
+$$;
+SELECT public.ryqen_reconcile_today_plan(
+  '${planA}',
+  current_date,
+  jsonb_build_array(
+    jsonb_build_object(
+      'action_id', '${actionReconsider}',
+      'position', 1,
+      'priority_score', 9,
+      'rationale', 'Planner snapshot',
+      'estimated_minutes', 15
+    ),
+    jsonb_build_object(
+      'action_id', '${actionReplace}',
+      'position', 2,
+      'priority_score', 8,
+      'rationale', 'Restored replacement',
+      'estimated_minutes', 15
+    )
+  )
+);
+DO $$
+BEGIN
+  IF (SELECT status FROM public.plan_items WHERE id = '${itemReplace}') <> 'pending' THEN
+    RAISE EXCEPTION 'valid replaced Plan Item was not restored to pending';
   END IF;
 END;
 $$;
