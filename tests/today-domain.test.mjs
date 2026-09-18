@@ -193,8 +193,12 @@ test('enforces the approved action lifecycle', () => {
   assert.equal(canTransitionAction('pending', 'deferred'), true)
   assert.equal(canTransitionAction('in_progress', 'completed'), true)
   assert.equal(canTransitionAction('in_progress', 'deferred'), true)
+  assert.equal(canTransitionAction('in_progress', 'paused'), true)
+  assert.equal(canTransitionAction('paused', 'in_progress'), true)
   assert.equal(canTransitionAction('deferred', 'pending'), true)
   assert.equal(canTransitionAction('pending', 'completed'), false)
+  assert.equal(canTransitionAction('paused', 'completed'), false)
+  assert.equal(canTransitionAction('paused', 'deferred'), false)
   assert.equal(canTransitionAction('completed', 'in_progress'), false)
 })
 

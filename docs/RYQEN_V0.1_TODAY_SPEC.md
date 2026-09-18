@@ -106,6 +106,10 @@ pending Actions again without copying or rewriting yesterday's plan.
 - Persistent `in_progress` Actions remain visible and controllable in Active
   Work across local-day boundaries. Active Work is separate from the maximum
   three fresh recommendations.
+- Paused Actions remain secondary Paused Work across local-day boundaries.
+  They remain attached to their historical lifecycle anchor, are never fresh
+  recommendations, and return to Active Work only when the user explicitly
+  chooses Resume.
 - Deferred Actions remain secondary and `deferred` across days. They are only
   made pending again when the user explicitly chooses Reconsider; Ryqen does
   not reactivate them automatically.
@@ -158,6 +162,16 @@ Plan Items or Activities.
 
 Defer is not failure. Move the action out of the immediate plan and
 allow the planner to reconsider it later.
+
+### Pause / Resume
+
+Pause temporarily stops an `in_progress` Action with intent to continue. It
+changes the Action and its lifecycle Plan Item to `paused`, records an
+`action_paused` Activity, and keeps the work visible as Paused Work rather
+than a fresh recommendation. Resume explicitly returns matching paused state
+to `in_progress`, records `action_resumed`, and sets `started_at` to begin a
+new foreground elapsed-time session. Pause does not reactivate or reschedule
+work automatically; it is intentionally distinct from Defer.
 
 ### Skip
 

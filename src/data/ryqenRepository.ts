@@ -86,6 +86,8 @@ export interface RyqenRepository {
   reconcileTodayPlan(input: ReconcileTodayPlanInput): Promise<void>
   createCapturedAction(input: CreateCapturedActionInput): Promise<Action>
   startTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
+  pauseTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
+  resumeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   completeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   deferTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   skipTodayPlanItem(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
@@ -326,7 +328,7 @@ export class SupabaseRyqenRepository implements RyqenRepository {
   }
 
   private async runTodayActionRpc(
-    functionName: 'ryqen_start_today_action' | 'ryqen_complete_today_action' | 'ryqen_defer_today_action' | 'ryqen_skip_today_plan_item' | 'ryqen_reconsider_today_action',
+    functionName: 'ryqen_start_today_action' | 'ryqen_pause_today_action' | 'ryqen_resume_today_action' | 'ryqen_complete_today_action' | 'ryqen_defer_today_action' | 'ryqen_skip_today_plan_item' | 'ryqen_reconsider_today_action',
     dailyPlanId: string,
     actionId: string,
   ): Promise<TodayActionMutationResult> {
@@ -336,6 +338,14 @@ export class SupabaseRyqenRepository implements RyqenRepository {
 
   startTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult> {
     return this.runTodayActionRpc('ryqen_start_today_action', dailyPlanId, actionId)
+  }
+
+  pauseTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult> {
+    return this.runTodayActionRpc('ryqen_pause_today_action', dailyPlanId, actionId)
+  }
+
+  resumeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult> {
+    return this.runTodayActionRpc('ryqen_resume_today_action', dailyPlanId, actionId)
   }
 
   completeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult> {

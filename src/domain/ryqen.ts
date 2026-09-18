@@ -4,11 +4,13 @@ export type ContextSource = 'user' | 'system' | 'integration' | 'ai'
 export type GoalStatus = 'active' | 'completed' | 'paused' | 'archived'
 export type ProjectStatus = GoalStatus
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'blocked' | 'deferred'
-export type ActionStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'deferred'
+export type ActionStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'deferred'
 export type DailyPlanStatus = 'draft' | 'active' | 'completed' | 'archived'
-export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'skipped' | 'deferred' | 'replaced'
+export type PlanItemStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'skipped' | 'deferred' | 'replaced'
 export type ActivityType =
   | 'action_started'
+  | 'action_paused'
+  | 'action_resumed'
   | 'action_completed'
   | 'action_deferred'
   | 'action_skipped'
@@ -168,6 +170,15 @@ export interface DeferredWork {
   planItem: PlanItem
 }
 
+/**
+ * Persistent work explicitly paused by the user. Its historical plan item is
+ * the validated lifecycle anchor used to resume it on a later local day.
+ */
+export interface PausedWork {
+  action: Action
+  planItem: PlanItem
+}
+
 export type TodayEmptyState =
   | 'no_pending_work'
   | 'no_work_fits_current_time'
@@ -183,6 +194,8 @@ export interface TodayPlanState {
    * lifecycle controls.
    */
   activeWork: ActiveWork[]
+  /** Explicitly paused persistent work, recoverable only through Resume. */
+  pausedWork: PausedWork[]
   /** Explicitly deferred persistent work, kept secondary and reconsiderable. */
   deferredWork: DeferredWork[]
   priorities: PriorityAction[]

@@ -2,7 +2,7 @@ import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, se
 import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayCheckIn'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
 import { assertTodayBackendContractVersion } from '../domain/todayBackendContract'
-import type { ActiveWork, DeferredWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
+import type { ActiveWork, DeferredWork, PausedWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
 
 export interface TodayCaptureResult {
@@ -62,6 +62,15 @@ function deferredWorkFor(planItems: PlanItem[], data: PlanningData): DeferredWor
   })
 }
 
+function pausedWorkFor(planItems: PlanItem[], data: PlanningData): PausedWork[] {
+  const latestByAction = latestPlanItemsByAction(planItems.filter((planItem) => planItem.status === 'paused'))
+  return data.actions.flatMap((action) => {
+    if (action.status !== 'paused') return []
+    const planItem = latestByAction.get(action.id)
+    return planItem ? [{ action, planItem }] : []
+  })
+}
+
 /**
  * Coordinates Today use cases. It deliberately has no React dependency and
  * delegates all persistence to RyqenRepository.
@@ -88,8 +97,9 @@ export class TodayService {
       .filter((action) => action.status === 'in_progress')
       .map((action) => action.id)
     const priorities = selectTodayPriorities(data, planningContext, activeActionIds, now)
-    const lifecyclePlanItems = await this.repository.listPlanItemsForActionStatuses(userId, ['in_progress', 'deferred'])
+    const lifecyclePlanItems = await this.repository.listPlanItemsForActionStatuses(userId, ['in_progress', 'paused', 'deferred'])
     const activeWork = activeWorkFor(lifecyclePlanItems, data)
+    const pausedWork = pausedWorkFor(lifecyclePlanItems, data)
     const deferredWork = deferredWorkFor(lifecyclePlanItems, data)
     let plan = await this.repository.findDailyPlan(userId, planDate)
 
@@ -99,6 +109,7 @@ export class TodayService {
           plan: null,
           planItems: [],
           activeWork,
+          pausedWork,
           deferredWork,
           priorities: [],
           actions: data.actions,
@@ -155,6 +166,7 @@ export class TodayService {
       plan,
       planItems: await this.repository.listPlanItems(plan.id),
       activeWork,
+      pausedWork,
       deferredWork,
       priorities: currentPriorities,
       actions: data.actions,
@@ -189,6 +201,22 @@ export class TodayService {
     const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
     if (!planItem) throw new Error('There is no in-progress plan item for this action')
     await this.repository.completeTodayAction(planItem.dailyPlanId, actionId)
+    return this.planToday(userId, now)
+  }
+
+  async pauseAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
+    await this.planToday(userId, now)
+    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
+    if (!planItem) throw new Error('There is no in-progress plan item for this action')
+    await this.repository.pauseTodayAction(planItem.dailyPlanId, actionId)
+    return this.planToday(userId, now)
+  }
+
+  async resumeAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
+    await this.planToday(userId, now)
+    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'paused')
+    if (!planItem) throw new Error('There is no paused plan item for this action')
+    await this.repository.resumeTodayAction(planItem.dailyPlanId, actionId)
     return this.planToday(userId, now)
   }
 

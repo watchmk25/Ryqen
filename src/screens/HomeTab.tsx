@@ -20,6 +20,7 @@ type PriorityCardProps = {
   pending: boolean
   unavailable: boolean
   onStart: (actionId: string) => void
+  onPause?: (actionId: string) => void
   onComplete: (actionId: string) => void
   onDefer: (actionId: string) => void
   onSkip: (actionId: string) => void
@@ -279,7 +280,7 @@ function TodayCheckInSheet({
   )
 }
 
-function PriorityCard({ priority, planItem, position, variant = 'priority', pending, unavailable, onStart, onComplete, onDefer, onSkip }: PriorityCardProps) {
+function PriorityCard({ priority, planItem, position, variant = 'priority', pending, unavailable, onStart, onPause, onComplete, onDefer, onSkip }: PriorityCardProps) {
   const isActiveWork = variant === 'active'
   const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
@@ -342,6 +343,15 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
         >
           <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{pending ? 'Updating...' : isInProgress ? 'Complete' : 'Start'}</Text>
         </TouchableOpacity>
+        {isInProgress && (
+          <TouchableOpacity
+            disabled={disabled}
+            onPress={() => onPause?.(priority.action.id)}
+            style={{ minWidth: 58, height: 44, backgroundColor: C.surface2, borderRadius: 11, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <Text style={{ color: C.t1, fontSize: 12, fontWeight: '700' }}>Pause</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           disabled={disabled}
           onPress={() => onDefer(priority.action.id)}
@@ -385,6 +395,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     isTodayUnavailable,
     reload,
     startAction,
+    pauseAction,
+    resumeAction,
     completeAction,
     deferAction,
     skipPlanItem,
@@ -394,6 +406,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   } = useTodayPlan(userId)
 
   const deferredItems = state?.deferredWork ?? []
+  const pausedItems = state?.pausedWork ?? []
   const completedCount = state?.planItems.filter((item) => item.status === 'completed').length ?? 0
   const rankColor = RANK_COLORS[rank] ?? C.accent
 
@@ -553,6 +566,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               pending={pendingActionId === priority.action.id}
               unavailable={isTodayUnavailable}
               onStart={(actionId) => void startAction(actionId)}
+              onPause={(actionId) => void pauseAction(actionId)}
               onComplete={(actionId) => void completeAction(actionId)}
               onDefer={(actionId) => void deferAction(actionId)}
               onSkip={(actionId) => void skipPlanItem(actionId)}
@@ -580,7 +594,31 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         </View>
       )}
 
-      {!loading && state && state.priorities.length === 0 && state.activeWork.length === 0 && (
+      {!loading && state && state.pausedWork.length > 0 && (
+        <View style={{ paddingHorizontal: 20, marginTop: 18, gap: 8 }}>
+          <Text style={[T.caption1, { color: C.t2, fontWeight: '800', letterSpacing: 0.8 }]}>PAUSED WORK</Text>
+          {pausedItems.map(({ planItem, action }) => {
+            const pending = pendingActionId === action.id
+            return (
+              <View key={planItem.id} style={{ backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={T.subhead}>{action.title}</Text>
+                  <Text style={[T.caption1, { marginTop: 3 }]}>Paused — resume when ready</Text>
+                </View>
+                <TouchableOpacity
+                  disabled={pending || isTodayUnavailable}
+                  onPress={() => void resumeAction(action.id)}
+                  style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
+                >
+                  <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending ? 'Updating...' : 'Resume'}</Text>
+                </TouchableOpacity>
+              </View>
+            )
+          })}
+        </View>
+      )}
+
+      {!loading && state && state.priorities.length === 0 && state.activeWork.length === 0 && state.pausedWork.length === 0 && (
         <View style={{ marginHorizontal: 20, backgroundColor: C.surface, borderRadius: 18, padding: 20, gap: 6 }}>
           <Text style={T.title3}>{emptyStateTitle(state.emptyState)}</Text>
           <Text style={T.footnote}>

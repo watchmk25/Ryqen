@@ -79,6 +79,7 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const blockedTaskAction = '30000000-0000-0000-0000-000000000008'
   const pausedProjectAction = '30000000-0000-0000-0000-000000000009'
   const pausedGoalAction = '30000000-0000-0000-0000-000000000010'
+  const actionPause = '30000000-0000-0000-0000-000000000011'
   const blockedTask = '60000000-0000-0000-0000-000000000001'
   const pausedProject = '60000000-0000-0000-0000-000000000002'
   const pausedGoal = '60000000-0000-0000-0000-000000000003'
@@ -89,6 +90,7 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const itemReconsider = '40000000-0000-0000-0000-000000000005'
   const itemReplace = '40000000-0000-0000-0000-000000000006'
   const overnightItem = '40000000-0000-0000-0000-000000000007'
+  const itemPause = '40000000-0000-0000-0000-000000000008'
   const otherActivity = '50000000-0000-0000-0000-000000000001'
 
   const output = runSql(`
@@ -123,7 +125,8 @@ VALUES
   ('${overnightAction}', '${userA}', 'Overnight work', 'in_progress', 3, 15),
   ('${blockedTaskAction}', '${userA}', 'Blocked parent', 'pending', 3, 15),
   ('${pausedProjectAction}', '${userA}', 'Paused project parent', 'pending', 3, 15),
-  ('${pausedGoalAction}', '${userA}', 'Paused goal parent', 'pending', 3, 15);
+  ('${pausedGoalAction}', '${userA}', 'Paused goal parent', 'pending', 3, 15),
+  ('${actionPause}', '${userA}', 'Pause and resume', 'pending', 3, 15);
 
 UPDATE public.actions SET task_id = '${blockedTask}' WHERE id = '${blockedTaskAction}';
 UPDATE public.actions SET project_id = '${pausedProject}' WHERE id = '${pausedProjectAction}';
@@ -137,6 +140,7 @@ VALUES
   ('${itemSkip}', '${planA}', '${actionSkip}', 3, 1, 'Lifecycle', 15, 'pending'),
   ('${itemReconsider}', '${planA}', '${actionReconsider}', 4, 1, 'Lifecycle', 15, 'deferred'),
   ('${itemReplace}', '${planA}', '${actionReplace}', 5, 1, 'Old recommendation', 15, 'pending'),
+  ('${itemPause}', '${planA}', '${actionPause}', 6, 1, 'Pause lifecycle', 15, 'pending'),
   ('${overnightItem}', '${historicalPlan}', '${overnightAction}', 1, 1, 'Historical lifecycle anchor', 15, 'in_progress');
 
 INSERT INTO public.activities (id, user_id, action_id, type)
@@ -146,7 +150,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '${userA}', true);
 DO $$
 BEGIN
-  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 1 THEN
+  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 2 THEN
     RAISE EXCEPTION 'Today backend contract returned an unexpected version';
   END IF;
 END;
@@ -237,6 +241,16 @@ BEGIN
   EXCEPTION WHEN no_data_found THEN NULL;
   END;
   BEGIN
+    PERFORM public.ryqen_pause_today_action('${planB}', '${actionB}');
+    RAISE EXCEPTION 'cross-user Pause RPC unexpectedly succeeded';
+  EXCEPTION WHEN no_data_found THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_resume_today_action('${planB}', '${actionB}');
+    RAISE EXCEPTION 'cross-user Resume RPC unexpectedly succeeded';
+  EXCEPTION WHEN no_data_found THEN NULL;
+  END;
+  BEGIN
     PERFORM public.ryqen_capture_action(' ', 3::smallint, NULL::timestamptz, 30);
     RAISE EXCEPTION 'invalid capture title unexpectedly succeeded';
   EXCEPTION WHEN raise_exception THEN NULL;
@@ -266,8 +280,41 @@ BEGIN
   END IF;
 END;
 $$;
+SELECT public.ryqen_pause_today_action('${planA}', '${actionA}');
+DO $$
+BEGIN
+  IF (SELECT status FROM public.actions WHERE id = '${actionA}') <> 'paused'
+    OR (SELECT status FROM public.plan_items WHERE id = '${itemA}') <> 'paused'
+    OR (SELECT count(*) FROM public.activities WHERE action_id = '${actionA}' AND type = 'action_paused') <> 1 THEN
+    RAISE EXCEPTION 'Pause RPC did not atomically create the expected lifecycle state';
+  END IF;
+  BEGIN
+    PERFORM public.ryqen_pause_today_action('${planA}', '${actionA}');
+    RAISE EXCEPTION 'invalid repeat Pause unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+END;
+$$;
+SELECT public.ryqen_resume_today_action('${planA}', '${actionA}');
+DO $$
+BEGIN
+  IF (SELECT status FROM public.actions WHERE id = '${actionA}') <> 'in_progress'
+    OR (SELECT status FROM public.plan_items WHERE id = '${itemA}') <> 'in_progress'
+    OR (SELECT started_at FROM public.actions WHERE id = '${actionA}') IS NULL
+    OR (SELECT count(*) FROM public.activities WHERE action_id = '${actionA}' AND type = 'action_resumed') <> 1 THEN
+    RAISE EXCEPTION 'Resume RPC did not atomically create the expected lifecycle state';
+  END IF;
+  BEGIN
+    PERFORM public.ryqen_resume_today_action('${planA}', '${actionA}');
+    RAISE EXCEPTION 'invalid repeat Resume unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+END;
+$$;
 SELECT public.ryqen_complete_today_action('${planA}', '${actionA}');
 SELECT public.ryqen_defer_today_action('${planA}', '${actionDefer}');
+SELECT public.ryqen_start_today_action('${planA}', '${actionPause}');
+SELECT public.ryqen_pause_today_action('${planA}', '${actionPause}');
 DO $$
 BEGIN
   BEGIN
@@ -349,6 +396,8 @@ BEGIN
     OR (SELECT status FROM public.plan_items WHERE id = '${itemA}') <> 'completed'
     OR (SELECT status FROM public.plan_items WHERE id = '${itemSkip}') <> 'skipped'
     OR (SELECT status FROM public.actions WHERE id = '${actionSkip}') <> 'pending'
+    OR (SELECT status FROM public.actions WHERE id = '${actionPause}') <> 'paused'
+    OR (SELECT status FROM public.plan_items WHERE id = '${itemPause}') <> 'paused'
     OR (SELECT count(*) FROM public.actions WHERE title = 'Captured safely' AND user_id = '${userA}' AND status = 'pending') <> 1 THEN
     RAISE EXCEPTION 'RPC lifecycle or planner reconciliation invariant failed';
   END IF;
@@ -431,6 +480,8 @@ DECLARE
 BEGIN
   FOREACH v_function IN ARRAY ARRAY[
     'public.ryqen_start_today_action(uuid,uuid)'::regprocedure,
+    'public.ryqen_pause_today_action(uuid,uuid)'::regprocedure,
+    'public.ryqen_resume_today_action(uuid,uuid)'::regprocedure,
     'public.ryqen_complete_today_action(uuid,uuid)'::regprocedure,
     'public.ryqen_defer_today_action(uuid,uuid)'::regprocedure,
     'public.ryqen_skip_today_plan_item(uuid,uuid)'::regprocedure,

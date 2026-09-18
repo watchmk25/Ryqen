@@ -72,6 +72,10 @@ export function useTodayPlan(userId: string | undefined) {
     try {
       const nextState = operation === 'start'
         ? await service.startAction(userId, actionId)
+        : operation === 'pause'
+          ? await service.pauseAction(userId, actionId)
+          : operation === 'resume'
+            ? await service.resumeAction(userId, actionId)
         : operation === 'complete'
           ? await service.completeAction(userId, actionId)
           : operation === 'defer'
@@ -153,6 +157,8 @@ export function useTodayPlan(userId: string | undefined) {
     isTodayUnavailable: !canMutateToday(availability),
     reload,
     startAction: (actionId: string) => perform('start', actionId),
+    pauseAction: (actionId: string) => perform('pause', actionId),
+    resumeAction: (actionId: string) => perform('resume', actionId),
     completeAction: (actionId: string) => perform('complete', actionId),
     deferAction: (actionId: string) => perform('defer', actionId),
     skipPlanItem: (actionId: string) => perform('skip', actionId),

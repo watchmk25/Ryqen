@@ -2,7 +2,8 @@ import type { ActionStatus } from './ryqen'
 
 const transitions: Record<ActionStatus, ActionStatus[]> = {
   pending: ['in_progress', 'deferred', 'cancelled'],
-  in_progress: ['completed', 'deferred'],
+  in_progress: ['completed', 'deferred', 'paused'],
+  paused: ['in_progress'],
   completed: [],
   cancelled: [],
   // Reconsideration is an explicit user decision. Nothing in the planner

@@ -21,7 +21,7 @@ class MemoryRyqenRepository {
     this.activities = []
     this.captureInputs = []
     this.sequence = 0
-    this.todayBackendContractVersion = 1
+    this.todayBackendContractVersion = 2
     this.todayBackendContractError = null
     this.todayBackendContractChecks = 0
   }
@@ -132,6 +132,12 @@ class MemoryRyqenRepository {
   async startTodayAction(planId, actionId) {
     return this.mutateTodayAction(planId, actionId, ['pending'], ['pending'], 'in_progress', 'in_progress', ['action_started', 'plan_item_started'])
   }
+  async pauseTodayAction(planId, actionId) {
+    return this.mutateTodayAction(planId, actionId, ['in_progress'], ['in_progress'], 'paused', 'paused', ['action_paused'])
+  }
+  async resumeTodayAction(planId, actionId) {
+    return this.mutateTodayAction(planId, actionId, ['paused'], ['paused'], 'in_progress', 'in_progress', ['action_resumed'])
+  }
   async completeTodayAction(planId, actionId) {
     return this.mutateTodayAction(planId, actionId, ['in_progress'], ['in_progress'], 'completed', 'completed', ['action_completed', 'plan_item_completed'])
   }
@@ -181,6 +187,37 @@ test('start, complete, defer, and explicit reconsideration preserve valid action
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
     'action_started', 'plan_item_started', 'action_completed', 'plan_item_completed', 'action_deferred',
   ])
+})
+
+test('Pause and Resume persist matching lifecycle state, reset the active-session timer, and preserve fresh slots', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('active'), createAction('pending-1'), createAction('pending-2'), createAction('pending-3'), createAction('pending-4'),
+  ])
+  const service = new TodayService(repository)
+
+  await service.startAction(userId, 'active', now)
+  const initialStartedAt = repository.data.actions.find((action) => action.id === 'active').startedAt
+  const paused = await service.pauseAction(userId, 'active', now)
+
+  assert.equal(repository.data.actions.find((action) => action.id === 'active').status, 'paused')
+  assert.equal(repository.planItems.find((item) => item.actionId === 'active')?.status, 'paused')
+  assert.deepEqual(paused.activeWork, [])
+  assert.deepEqual(paused.pausedWork.map((work) => work.action.id), ['active'])
+  assert.equal(paused.priorities.some((priority) => priority.action.id === 'active'), false)
+  await assert.rejects(() => service.pauseAction(userId, 'active', now), /There is no in-progress plan item/)
+
+  const resumed = await service.resumeAction(userId, 'active', now)
+  assert.equal(repository.data.actions.find((action) => action.id === 'active').status, 'in_progress')
+  assert.equal(repository.planItems.find((item) => item.actionId === 'active')?.status, 'in_progress')
+  assert.notEqual(repository.data.actions.find((action) => action.id === 'active').startedAt, initialStartedAt)
+  assert.deepEqual(resumed.pausedWork, [])
+  assert.deepEqual(resumed.activeWork.map((work) => work.action.id), ['active'])
+  assert.equal(resumed.priorities.length, 3)
+  assert.equal(resumed.priorities.some((priority) => priority.action.id === 'active'), false)
+  assert.deepEqual(repository.activities.map((activity) => activity.type), [
+    'action_started', 'plan_item_started', 'action_paused', 'action_resumed',
+  ])
+  await assert.rejects(() => service.resumeAction(userId, 'active', now), /There is no paused plan item/)
 })
 
 test('rejects a retry without duplicating atomic start activities', async () => {
@@ -632,6 +669,32 @@ test('overnight Active Work remains visible without pending work and can be comp
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
     'action_started', 'plan_item_started', 'action_completed', 'plan_item_completed',
   ])
+})
+
+test('overnight paused work remains recoverable through its historical lifecycle anchor without automatic reactivation', async () => {
+  const repository = new MemoryRyqenRepository([createAction('paused-action')])
+  const service = new TodayService(repository)
+  const dayOne = new Date(2026, 8, 12, 9, 0, 0)
+  const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
+
+  await service.startAction(userId, 'paused-action', dayOne)
+  await service.pauseAction(userId, 'paused-action', dayOne)
+  const yesterdayPlanId = repository.plans[0].id
+  const overnight = await service.planToday(userId, dayTwo)
+
+  assert.equal(repository.data.actions.find((action) => action.id === 'paused-action')?.status, 'paused')
+  assert.equal(overnight.plan, null)
+  assert.deepEqual(overnight.activeWork, [])
+  assert.deepEqual(overnight.pausedWork.map((work) => work.action.id), ['paused-action'])
+  assert.equal(overnight.pausedWork[0].planItem.dailyPlanId, yesterdayPlanId)
+  assert.deepEqual(overnight.priorities, [])
+
+  const resumed = await service.resumeAction(userId, 'paused-action', dayTwo)
+  assert.equal(repository.data.actions.find((action) => action.id === 'paused-action')?.status, 'in_progress')
+  assert.deepEqual(resumed.pausedWork, [])
+  assert.deepEqual(resumed.activeWork.map((work) => work.action.id), ['paused-action'])
+  assert.equal(resumed.activeWork[0].planItem?.dailyPlanId, yesterdayPlanId)
+  assert.equal(resumed.priorities.some((priority) => priority.action.id === 'paused-action'), false)
 })
 
 test('multiple overnight Active Work items remain visible and an individual item can be deferred through its original lifecycle item', async () => {

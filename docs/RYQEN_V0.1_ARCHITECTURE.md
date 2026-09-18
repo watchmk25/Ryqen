@@ -116,7 +116,7 @@ A meaningful piece of work that may contain one or more Actions.
 A concrete next step. Actions may exist independently.
 
 ### Daily Plan
-The adaptive, date-scoped snapshot of recommended work/actions for the current circumstances. Persistent Actions remain the source of lifecycle truth; cross-day Active Work and Deferred Work may use historical Plan Items only as validated lifecycle/audit anchors.
+The adaptive, date-scoped snapshot of recommended work/actions for the current circumstances. Persistent Actions remain the source of lifecycle truth; cross-day Active Work, Paused Work, and Deferred Work may use historical Plan Items only as validated lifecycle/audit anchors.
 
 ### Activity / Progress
 Durable records of meaningful completed work or progress.
@@ -192,6 +192,8 @@ Important state transitions are validated independently of UI and future AI inpu
 ### Implemented Today lifecycle boundary
 
 Meaningful Today lifecycle mutations use protected Supabase RPC boundaries. Those functions authenticate through `auth.uid()`, explicitly verify record ownership, validate the expected state transition, perform related writes atomically, and record lifecycle Activities atomically where the transition requires them.
+
+Pause is a persisted lifecycle state, distinct from Defer: `in_progress -> paused -> in_progress`. A Pause preserves its historical Plan Item anchor, removes the Action from Active Work and fresh recommendations, and requires explicit Resume. Resume records a new `started_at` for the current active session. Defer instead moves work out of the immediate context and requires explicit Reconsider before it can become pending again.
 
 Authenticated clients cannot directly write Activities or mutate Plan Items. Direct Action updates are limited to ordinary planning fields; lifecycle fields such as Action status and `started_at` remain RPC-controlled. The protected functions are `SECURITY DEFINER`, run with an empty `search_path`, and retain explicit `auth.uid()` and ownership checks rather than relying on definer privileges or RLS as the authorization decision.
 
