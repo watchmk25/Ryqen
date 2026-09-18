@@ -21,10 +21,18 @@ class MemoryRyqenRepository {
     this.activities = []
     this.captureInputs = []
     this.sequence = 0
+    this.todayBackendContractVersion = 1
+    this.todayBackendContractError = null
+    this.todayBackendContractChecks = 0
   }
 
   clone(value) { return structuredClone(value) }
   nextId(prefix) { this.sequence += 1; return `${prefix}-${this.sequence}` }
+  async getTodayBackendContractVersion() {
+    this.todayBackendContractChecks += 1
+    if (this.todayBackendContractError) throw this.todayBackendContractError
+    return this.todayBackendContractVersion
+  }
   async loadPlanningData(ownerId) {
     const owns = (item) => item.userId === ownerId
     return this.clone({
@@ -706,4 +714,34 @@ test('cross-day lifecycle discovery is isolated to the authenticated user', asyn
   await assert.rejects(() => service.reconsiderDeferredAction(userId, 'other-deferred'), /There is no deferred plan item/)
   assert.equal(otherAction.status, 'deferred')
   assert.equal(repository.planItems.find((item) => item.id === 'other-item')?.status, 'deferred')
+})
+
+test('a compatible Today backend contract permits normal planning', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  const service = new TodayService(repository)
+
+  const state = await service.planToday(userId, now)
+
+  assert.deepEqual(state.priorities.map((priority) => priority.action.id), ['action-1'])
+  assert.equal(repository.todayBackendContractChecks, 1)
+})
+
+test('an incompatible Today backend contract prevents planning and every write-first Today operation', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  repository.todayBackendContractVersion = 0
+  const service = new TodayService(repository)
+
+  await assert.rejects(() => service.planToday(userId, now), { name: 'TodayBackendCompatibilityError' })
+  await assert.rejects(() => service.captureAction(userId, {
+    title: 'Must not be captured', importance: 'normal', dueTiming: 'none', effort: '30',
+  }, now), { name: 'TodayBackendCompatibilityError' })
+  await assert.rejects(() => service.applyTodayCheckIn(userId, {
+    availableTimeMinutes: 30, capacity: 'medium',
+  }, now), { name: 'TodayBackendCompatibilityError' })
+  await assert.rejects(() => service.reconsiderDeferredAction(userId, 'action-1', now), { name: 'TodayBackendCompatibilityError' })
+
+  assert.equal(repository.plans.length, 0)
+  assert.equal(repository.captureInputs.length, 0)
+  assert.equal(repository.data.contexts.length, 0)
+  assert.equal(repository.data.actions.length, 1)
 })

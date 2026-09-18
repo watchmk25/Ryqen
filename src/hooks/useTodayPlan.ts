@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
 import type { TodayCheckInInput, TodayPlanState, WorkCaptureInput } from '../domain'
+import { isTodayBackendCompatibilityError } from '../domain'
 import { acknowledgementForTodayAction, type TodayAcknowledgement } from './todayAcknowledgement'
 import { canMutateToday, transitionTodayAvailability, type TodayAvailability } from './todayAvailabilityState'
 import { transitionTodayError, type TodayCommandError, type TodayMutationOperation } from './todayErrorState'
@@ -48,9 +49,11 @@ export function useTodayPlan(userId: string | undefined) {
       setState(await service.planToday(userId))
       applyAvailability({ type: 'reload_succeeded' })
       applyError({ type: 'reload_succeeded', preserveExisting: preserveError })
-    } catch {
+    } catch (error) {
       applyAvailability({ type: 'reload_failed' })
-      applyError({ type: 'reload_failed' })
+      applyError(isTodayBackendCompatibilityError(error)
+        ? { type: 'backend_incompatible' }
+        : { type: 'reload_failed' })
     } finally {
       setLoading(false)
     }
@@ -82,8 +85,10 @@ export function useTodayPlan(userId: string | undefined) {
         ? acknowledgementForTodayAction(nextState, actionId, 'reconsidered')
         : null)
       applyError({ type: 'mutation_succeeded' })
-    } catch {
-      applyError({ type: 'mutation_failed', operation })
+    } catch (error) {
+      applyError(isTodayBackendCompatibilityError(error)
+        ? { type: 'backend_incompatible' }
+        : { type: 'mutation_failed', operation })
       await reload({ preserveError: true })
     } finally {
       setPendingActionId(null)
@@ -103,8 +108,10 @@ export function useTodayPlan(userId: string | undefined) {
       setAcknowledgement(acknowledgementForTodayAction(result.state, result.capturedActionId, 'captured'))
       applyError({ type: 'mutation_succeeded' })
       return true
-    } catch {
-      applyError({ type: 'mutation_failed', operation: 'capture' })
+    } catch (error) {
+      applyError(isTodayBackendCompatibilityError(error)
+        ? { type: 'backend_incompatible' }
+        : { type: 'mutation_failed', operation: 'capture' })
       await reload({ preserveError: true })
       return false
     } finally {
@@ -124,8 +131,10 @@ export function useTodayPlan(userId: string | undefined) {
       applyAvailability({ type: 'received_current_state' })
       applyError({ type: 'mutation_succeeded' })
       return true
-    } catch {
-      applyError({ type: 'mutation_failed', operation: 'check_in' })
+    } catch (error) {
+      applyError(isTodayBackendCompatibilityError(error)
+        ? { type: 'backend_incompatible' }
+        : { type: 'mutation_failed', operation: 'check_in' })
       await reload({ preserveError: true })
       return false
     } finally {

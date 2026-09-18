@@ -17,6 +17,7 @@ import type {
   Task,
   TaskStatus,
 } from '../domain'
+import { isMissingTodayBackendContractRpc, TodayBackendCompatibilityError } from '../domain/todayBackendContract'
 
 type DatabaseRow = Record<string, unknown>
 
@@ -73,6 +74,7 @@ export interface CreateContextInput {
  * Supabase. It keeps planning testable without a signed-in session.
  */
 export interface RyqenRepository {
+  getTodayBackendContractVersion(): Promise<number>
   loadPlanningData(userId: string): Promise<PlanningData>
   createContexts(inputs: CreateContextInput[]): Promise<Context[]>
   findDailyPlan(userId: string, planDate: string): Promise<DailyPlan | null>
@@ -195,6 +197,24 @@ function mapTodayActionMutationResult(value: unknown): TodayActionMutationResult
 }
 
 export class SupabaseRyqenRepository implements RyqenRepository {
+  async getTodayBackendContractVersion(): Promise<number> {
+    const result = await supabase.rpc('ryqen_today_backend_contract')
+    if (result.error) {
+      // PostgREST uses PGRST202 when the exposed RPC does not exist. It is
+      // the one safe client-side signal of a pre-contract hosted backend.
+      if (isMissingTodayBackendContractRpc(result.error)) throw new TodayBackendCompatibilityError('missing')
+      throw new Error(`Read Today backend contract: ${result.error.message}`)
+    }
+    if (typeof result.data !== 'object' || result.data === null || Array.isArray(result.data)) {
+      throw new TodayBackendCompatibilityError('unsupported')
+    }
+    const version = (result.data as DatabaseRow).contract_version
+    if (typeof version !== 'number' || !Number.isInteger(version)) {
+      throw new TodayBackendCompatibilityError('unsupported')
+    }
+    return version
+  }
+
   async loadPlanningData(userId: string): Promise<PlanningData> {
     const [contextsResult, goalsResult, projectsResult, tasksResult, actionsResult] = await Promise.all([
       supabase.from('contexts').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).order('id', { ascending: false }),

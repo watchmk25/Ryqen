@@ -144,6 +144,13 @@ VALUES ('${otherActivity}', '${userB}', '${actionB}', 'action_started');
 
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '${userA}', true);
+DO $$
+BEGIN
+  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 1 THEN
+    RAISE EXCEPTION 'Today backend contract returned an unexpected version';
+  END IF;
+END;
+$$;
 
 DO $$
 BEGIN
@@ -400,10 +407,24 @@ BEGIN
     RAISE EXCEPTION 'anonymous lifecycle RPC unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
+  BEGIN
+    PERFORM public.ryqen_today_backend_contract();
+    RAISE EXCEPTION 'anonymous Today backend contract RPC unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
 END;
 $$;
 
 RESET ROLE;
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.ryqen_today_backend_contract();
+    RAISE EXCEPTION 'unauthenticated Today backend contract RPC unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+END;
+$$;
 DO $$
 DECLARE
   v_function regprocedure;
@@ -416,7 +437,8 @@ BEGIN
     'public.ryqen_reconsider_today_action(uuid,uuid)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,timestamp with time zone)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,timestamp with time zone,integer)'::regprocedure,
-    'public.ryqen_reconcile_today_plan(uuid,date,jsonb)'::regprocedure
+    'public.ryqen_reconcile_today_plan(uuid,date,jsonb)'::regprocedure,
+    'public.ryqen_today_backend_contract()'::regprocedure
   ]
   LOOP
     IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = v_function)

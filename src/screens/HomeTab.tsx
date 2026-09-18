@@ -517,7 +517,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
       {!loading && error && (
         <View style={{ marginHorizontal: 20, marginBottom: 16, backgroundColor: C.danger + '16', borderRadius: 16, padding: 16, gap: 10 }}>
           <View>
-            <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>{error.source === 'mutation' ? "Couldn't update this action" : 'Today is unavailable'}</Text>
+            <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>{error.source === 'mutation' ? "Couldn't update this action" : error.source === 'compatibility' ? 'Backend update needed' : 'Today is unavailable'}</Text>
             <Text style={[T.caption1, { marginTop: 4 }]}>{error.message}</Text>
             {isTodayUnavailable && <Text style={[T.caption1, { marginTop: 4 }]}>Your displayed plan may be out of date. Refresh Today to continue.</Text>}
           </View>

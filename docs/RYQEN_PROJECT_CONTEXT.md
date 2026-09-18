@@ -198,6 +198,7 @@ The engineering audit found:
 - RLS enforces user ownership. Meaningful Today lifecycle changes are protected by server-side RPCs with explicit authentication, ownership, transition validation, atomic Activity writes where applicable, and restricted direct client mutation paths. Progression/XP integrity remains a separate legacy concern.
 - Existing rank definitions conflict and rank does not currently progress correctly.
 - Focused domain, service, and local Supabase integration tests are established. CI has not been established as part of this V0.1 work.
+- Hosted/physical-device Today testing requires the remote Supabase migration ledger to be verified first with `npm run supabase:migration-drift` and `SUPABASE_DB_URL`. The authenticated Today backend-contract RPC is a client safety net for absent/incompatible hosted backend APIs, not a substitute for applying reviewed migrations. Mobile clients never run migrations.
 
 Do not redesign the entire app. Evolve it carefully.
 

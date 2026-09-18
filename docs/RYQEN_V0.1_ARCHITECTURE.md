@@ -211,6 +211,23 @@ The deterministic planner remains responsible for context-driven exclusions, tim
 
 Reconciliation cannot use an invalid lifecycle Action to create a fresh pending snapshot and does not create Activities.
 
+### Hosted backend compatibility
+
+The Today client requires the authenticated read-only backend contract RPC
+`ryqen_today_backend_contract`, currently contract version `1`, before it
+loads plans or requests a Today mutation. This is a safety net that presents a
+clear backend-update message when the endpoint is absent or its version is
+unsupported; ordinary network/request failures remain ordinary Today refresh
+failures. It does not replace deployment discipline.
+
+Mobile clients never run Supabase migrations. Before hosted or physical-device
+backend testing, verify that local and remote migration histories match with
+`npm run supabase:migration-drift` using `SUPABASE_DB_URL`. Local and remote
+databases can diverge, and the check is intentionally manual/read-only: it
+never applies a migration. Bump the contract version only for a backend API
+change that requires a newer client/backend contract, not for unrelated or
+backward-compatible migrations.
+
 Capabilities affecting external systems, user data, or important state require explicit permission boundaries.
 
 Meaningful operations should eventually record enough audit information to understand what was requested, what occurred, which permission was used, and whether it succeeded.

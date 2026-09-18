@@ -1,7 +1,7 @@
 export type TodayMutationOperation = 'start' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'capture' | 'check_in'
 
 export interface TodayCommandError {
-  source: 'mutation' | 'reload'
+  source: 'mutation' | 'reload' | 'compatibility'
   message: string
 }
 
@@ -11,6 +11,7 @@ export type TodayErrorEvent =
   | { type: 'mutation_failed'; operation: TodayMutationOperation }
   | { type: 'reload_succeeded'; preserveExisting: boolean }
   | { type: 'reload_failed' }
+  | { type: 'backend_incompatible' }
 
 const mutationMessages: Record<TodayMutationOperation, string> = {
   start: "Couldn't start this action. Your plan was refreshed.",
@@ -37,5 +38,10 @@ export function transitionTodayError(
       return event.preserveExisting ? current : null
     case 'reload_failed':
       return { source: 'reload', message: "Couldn't refresh Today. Check your connection and try again." }
+    case 'backend_incompatible':
+      return {
+        source: 'compatibility',
+        message: 'Today needs a backend update. Please update the connected Supabase backend, then refresh.',
+      }
   }
 }

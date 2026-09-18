@@ -7,7 +7,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "test": "node --experimental-strip-types --experimental-loader ./tests/typescript-loader.mjs tests/run.mjs"
+    "test": "node --experimental-strip-types --experimental-loader ./tests/typescript-loader.mjs tests/run.mjs",
+    "supabase:migration-drift": "node scripts/checkSupabaseMigrationDrift.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

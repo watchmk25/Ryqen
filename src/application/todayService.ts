@@ -1,6 +1,7 @@
 import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities } from '../domain/planning'
 import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayCheckIn'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
+import { assertTodayBackendContractVersion } from '../domain/todayBackendContract'
 import type { ActiveWork, DeferredWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository } from '../data/ryqenRepository'
 
@@ -72,7 +73,12 @@ export class TodayService {
     this.repository = repository
   }
 
+  private async ensureTodayBackendContract(): Promise<void> {
+    assertTodayBackendContractVersion(await this.repository.getTodayBackendContractVersion())
+  }
+
   async planToday(userId: string, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
     const planDate = planDateFor(now)
     const data = await this.repository.loadPlanningData(userId)
     const planningContext = derivePlanningContext(data.contexts, now)
@@ -158,12 +164,14 @@ export class TodayService {
   }
 
   async captureAction(userId: string, input: WorkCaptureInput, now = new Date()): Promise<TodayCaptureResult> {
+    await this.ensureTodayBackendContract()
     const capture = prepareWorkCapture(input, now)
     const action = await this.repository.createCapturedAction(capture)
     return { state: await this.planToday(userId, now), capturedActionId: action.id }
   }
 
   async applyTodayCheckIn(userId: string, input: TodayCheckInInput, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
     const contexts = prepareTodayCheckIn(input, now)
     await this.repository.createContexts(contexts.map((context) => ({ ...context, userId })))
     return this.planToday(userId, now)
@@ -203,6 +211,7 @@ export class TodayService {
   }
 
   async reconsiderDeferredAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
     const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'deferred')
     if (!planItem) throw new Error('There is no deferred plan item for this action')
     await this.repository.reconsiderTodayAction(planItem.dailyPlanId, actionId)
