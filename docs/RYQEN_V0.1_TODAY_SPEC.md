@@ -169,9 +169,14 @@ Pause temporarily stops an `in_progress` Action with intent to continue. It
 changes the Action and its lifecycle Plan Item to `paused`, records an
 `action_paused` Activity, and keeps the work visible as Paused Work rather
 than a fresh recommendation. Resume explicitly returns matching paused state
-to `in_progress`, records `action_resumed`, and sets `started_at` to begin a
-new foreground elapsed-time session. Pause does not reactivate or reschedule
-work automatically; it is intentionally distinct from Defer.
+to `in_progress`, records `action_resumed`, and starts a new foreground
+session. `started_at` is only that open-session marker; previous sessions are
+stored in `accumulated_active_seconds`, so Pause/Resume never reset visible
+active time. Pause, active Defer, and Complete flush the open session on the
+server. Completion records immutable target, final active seconds, and delta
+metadata from the lifecycle Plan Item snapshot when a target exists. Pause
+does not reactivate or reschedule work automatically; it is intentionally
+distinct from Defer.
 
 ### Skip
 

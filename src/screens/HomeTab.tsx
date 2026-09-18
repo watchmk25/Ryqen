@@ -18,6 +18,7 @@ type PriorityCardProps = {
   position: number
   variant?: 'active' | 'priority'
   pending: boolean
+  pendingOperation: string | null
   unavailable: boolean
   onStart: (actionId: string) => void
   onPause?: (actionId: string) => void
@@ -108,16 +109,16 @@ function greetingForNow(): string {
   return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 }
 
-function ElapsedTime({ startedAt }: { startedAt: string }) {
+function ElapsedTime({ action }: { action: PriorityAction['action'] }) {
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
     setNow(new Date())
     const intervalId = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(intervalId)
-  }, [startedAt])
+  }, [action.startedAt])
 
-  return <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', fontVariant: ['tabular-nums'] }}>Elapsed {formatElapsedTime(startedAt, now)}</Text>
+  return <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', fontVariant: ['tabular-nums'] }}>Elapsed {formatElapsedTime(action, now)}</Text>
 }
 
 function WorkCaptureCard({
@@ -280,7 +281,7 @@ function TodayCheckInSheet({
   )
 }
 
-function PriorityCard({ priority, planItem, position, variant = 'priority', pending, unavailable, onStart, onPause, onComplete, onDefer, onSkip }: PriorityCardProps) {
+function PriorityCard({ priority, planItem, position, variant = 'priority', pending, pendingOperation, unavailable, onStart, onPause, onComplete, onDefer, onSkip }: PriorityCardProps) {
   const isActiveWork = variant === 'active'
   const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
@@ -323,7 +324,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
         {isInProgress && (
           <View style={{ alignItems: 'flex-end', gap: 2 }}>
             <Text style={{ color: C.warning, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>IN PROGRESS</Text>
-            {priority.action.startedAt && <ElapsedTime startedAt={priority.action.startedAt} />}
+            <ElapsedTime action={priority.action} />
           </View>
         )}
       </View>
@@ -341,7 +342,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
           onPress={() => isInProgress ? onComplete(priority.action.id) : onStart(priority.action.id)}
           style={{ flex: 1, height: 44, backgroundColor: disabled ? C.surface2 : C.accent, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{pending ? 'Updating...' : isInProgress ? 'Complete' : 'Start'}</Text>
+          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{pending && pendingOperation === 'complete' ? 'Completing...' : isInProgress ? 'Complete' : 'Start'}</Text>
         </TouchableOpacity>
         {isInProgress && (
           <TouchableOpacity
@@ -349,7 +350,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
             onPress={() => onPause?.(priority.action.id)}
             style={{ minWidth: 58, height: 44, backgroundColor: C.surface2, borderRadius: 11, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
           >
-            <Text style={{ color: C.t1, fontSize: 12, fontWeight: '700' }}>Pause</Text>
+            <Text style={{ color: C.t1, fontSize: 12, fontWeight: '700' }}>{pending && pendingOperation === 'pause' ? 'Pausing...' : 'Pause'}</Text>
           </TouchableOpacity>
         )}
         <TouchableOpacity
@@ -388,6 +389,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     state,
     loading,
     pendingActionId,
+    pendingOperation,
     capturing,
     checkingIn,
     error,
@@ -564,6 +566,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               position={index + 1}
               variant="active"
               pending={pendingActionId === priority.action.id}
+              pendingOperation={pendingOperation}
               unavailable={isTodayUnavailable}
               onStart={(actionId) => void startAction(actionId)}
               onPause={(actionId) => void pauseAction(actionId)}
@@ -584,6 +587,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               planItem={state.planItems.find((item) => item.actionId === priority.action.id)}
               position={index + 1}
               pending={pendingActionId === priority.action.id}
+              pendingOperation={pendingOperation}
               unavailable={isTodayUnavailable}
               onStart={(actionId) => void startAction(actionId)}
               onComplete={(actionId) => void completeAction(actionId)}
@@ -603,14 +607,14 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               <View key={planItem.id} style={{ backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                 <View style={{ flex: 1 }}>
                   <Text style={T.subhead}>{action.title}</Text>
-                  <Text style={[T.caption1, { marginTop: 3 }]}>Paused — resume when ready</Text>
+                  <Text style={[T.caption1, { marginTop: 3 }]}>Paused · Active {formatElapsedTime(action)}</Text>
                 </View>
                 <TouchableOpacity
                   disabled={pending || isTodayUnavailable}
                   onPress={() => void resumeAction(action.id)}
                   style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
                 >
-                  <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending ? 'Updating...' : 'Resume'}</Text>
+                  <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending && pendingOperation === 'resume' ? 'Resuming...' : 'Resume'}</Text>
                 </TouchableOpacity>
               </View>
             )

@@ -107,6 +107,12 @@ function nullableNumber(value: unknown): number | null {
   return typeof value === 'number' ? value : null
 }
 
+function nonNegativeInteger(value: unknown, field: string): number {
+  const numberValue = typeof value === 'number' ? value : Number(value)
+  if (!Number.isSafeInteger(numberValue) || numberValue < 0) throw new Error(`Invalid ${field} returned from Supabase`)
+  return numberValue
+}
+
 function jsonValue(value: unknown): JsonValue {
   return value as JsonValue
 }
@@ -160,6 +166,7 @@ function mapAction(row: DatabaseRow): Action {
     title: requireString(row.title, 'actions.title'), description: nullableString(row.description), status: row.status as ActionStatus,
     importance: Number(row.importance),
     estimatedMinutes: nullableNumber(row.estimated_minutes), dueAt: nullableString(row.due_at),
+    accumulatedActiveSeconds: nonNegativeInteger(row.accumulated_active_seconds, 'actions.accumulated_active_seconds'),
     startedAt: nullableString(row.started_at),
     createdAt: requireString(row.created_at, 'actions.created_at'), updatedAt: requireString(row.updated_at, 'actions.updated_at'),
   }

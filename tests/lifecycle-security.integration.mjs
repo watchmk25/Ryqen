@@ -80,6 +80,7 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const pausedProjectAction = '30000000-0000-0000-0000-000000000009'
   const pausedGoalAction = '30000000-0000-0000-0000-000000000010'
   const actionPause = '30000000-0000-0000-0000-000000000011'
+  const actionNoTarget = '30000000-0000-0000-0000-000000000012'
   const blockedTask = '60000000-0000-0000-0000-000000000001'
   const pausedProject = '60000000-0000-0000-0000-000000000002'
   const pausedGoal = '60000000-0000-0000-0000-000000000003'
@@ -91,6 +92,7 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const itemReplace = '40000000-0000-0000-0000-000000000006'
   const overnightItem = '40000000-0000-0000-0000-000000000007'
   const itemPause = '40000000-0000-0000-0000-000000000008'
+  const itemNoTarget = '40000000-0000-0000-0000-000000000009'
   const otherActivity = '50000000-0000-0000-0000-000000000001'
 
   const output = runSql(`
@@ -126,7 +128,8 @@ VALUES
   ('${blockedTaskAction}', '${userA}', 'Blocked parent', 'pending', 3, 15),
   ('${pausedProjectAction}', '${userA}', 'Paused project parent', 'pending', 3, 15),
   ('${pausedGoalAction}', '${userA}', 'Paused goal parent', 'pending', 3, 15),
-  ('${actionPause}', '${userA}', 'Pause and resume', 'pending', 3, 15);
+  ('${actionPause}', '${userA}', 'Pause and resume', 'pending', 3, 15),
+  ('${actionNoTarget}', '${userA}', 'No timing target', 'pending', 3, 15);
 
 UPDATE public.actions SET task_id = '${blockedTask}' WHERE id = '${blockedTaskAction}';
 UPDATE public.actions SET project_id = '${pausedProject}' WHERE id = '${pausedProjectAction}';
@@ -141,6 +144,7 @@ VALUES
   ('${itemReconsider}', '${planA}', '${actionReconsider}', 4, 1, 'Lifecycle', 15, 'deferred'),
   ('${itemReplace}', '${planA}', '${actionReplace}', 5, 1, 'Old recommendation', 15, 'pending'),
   ('${itemPause}', '${planA}', '${actionPause}', 6, 1, 'Pause lifecycle', 15, 'pending'),
+  ('${itemNoTarget}', '${planA}', '${actionNoTarget}', 7, 1, 'No timing target', NULL, 'pending'),
   ('${overnightItem}', '${historicalPlan}', '${overnightAction}', 1, 1, 'Historical lifecycle anchor', 15, 'in_progress');
 
 INSERT INTO public.activities (id, user_id, action_id, type)
@@ -150,7 +154,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '${userA}', true);
 DO $$
 BEGIN
-  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 2 THEN
+  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 3 THEN
     RAISE EXCEPTION 'Today backend contract returned an unexpected version';
   END IF;
 END;
@@ -181,6 +185,11 @@ BEGIN
   BEGIN
     UPDATE public.actions SET started_at = now() WHERE id = '${actionA}';
     RAISE EXCEPTION 'direct Action started_at UPDATE unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE public.actions SET accumulated_active_seconds = 1 WHERE id = '${actionA}';
+    RAISE EXCEPTION 'direct Action accumulated timing UPDATE unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
   BEGIN
@@ -280,11 +289,17 @@ BEGIN
   END IF;
 END;
 $$;
+RESET ROLE;
+UPDATE public.actions SET started_at = now() - interval '120 seconds' WHERE id = '${actionA}';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${userA}', true);
 SELECT public.ryqen_pause_today_action('${planA}', '${actionA}');
 DO $$
 BEGIN
   IF (SELECT status FROM public.actions WHERE id = '${actionA}') <> 'paused'
     OR (SELECT status FROM public.plan_items WHERE id = '${itemA}') <> 'paused'
+    OR (SELECT accumulated_active_seconds FROM public.actions WHERE id = '${actionA}') <> 120
+    OR (SELECT started_at FROM public.actions WHERE id = '${actionA}') IS NOT NULL
     OR (SELECT count(*) FROM public.activities WHERE action_id = '${actionA}' AND type = 'action_paused') <> 1 THEN
     RAISE EXCEPTION 'Pause RPC did not atomically create the expected lifecycle state';
   END IF;
@@ -293,6 +308,9 @@ BEGIN
     RAISE EXCEPTION 'invalid repeat Pause unexpectedly succeeded';
   EXCEPTION WHEN raise_exception THEN NULL;
   END;
+  IF (SELECT accumulated_active_seconds FROM public.actions WHERE id = '${actionA}') <> 120 THEN
+    RAISE EXCEPTION 'repeat Pause double-counted active time';
+  END IF;
 END;
 $$;
 SELECT public.ryqen_resume_today_action('${planA}', '${actionA}');
@@ -311,7 +329,42 @@ BEGIN
   END;
 END;
 $$;
+RESET ROLE;
+UPDATE public.actions SET started_at = now() - interval '60 seconds' WHERE id = '${actionA}';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${userA}', true);
 SELECT public.ryqen_complete_today_action('${planA}', '${actionA}');
+DO $$
+BEGIN
+  IF (SELECT accumulated_active_seconds FROM public.actions WHERE id = '${actionA}') <> 180
+    OR (SELECT started_at FROM public.actions WHERE id = '${actionA}') IS NOT NULL
+    OR (SELECT metadata FROM public.activities WHERE action_id = '${actionA}' AND type = 'action_completed')
+      <> jsonb_build_object('plan_item_id', '${itemA}'::uuid, 'target_minutes', 15, 'active_seconds', 180, 'delta_seconds', -720) THEN
+    RAISE EXCEPTION 'Complete did not persist authoritative timing metadata';
+  END IF;
+END;
+$$;
+SELECT public.ryqen_start_today_action('${planA}', '${actionNoTarget}');
+RESET ROLE;
+UPDATE public.actions SET started_at = now() - interval '120 seconds' WHERE id = '${actionNoTarget}';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '${userA}', true);
+SELECT public.ryqen_complete_today_action('${planA}', '${actionNoTarget}');
+DO $$
+DECLARE
+  v_metadata jsonb;
+BEGIN
+  SELECT metadata INTO v_metadata
+  FROM public.activities
+  WHERE action_id = '${actionNoTarget}' AND type = 'action_completed';
+
+  IF v_metadata <> jsonb_build_object('plan_item_id', '${itemNoTarget}'::uuid, 'active_seconds', 120)
+    OR v_metadata ? 'target_minutes'
+    OR v_metadata ? 'delta_seconds' THEN
+    RAISE EXCEPTION 'Complete fabricated timing target metadata';
+  END IF;
+END;
+$$;
 SELECT public.ryqen_defer_today_action('${planA}', '${actionDefer}');
 SELECT public.ryqen_start_today_action('${planA}', '${actionPause}');
 SELECT public.ryqen_pause_today_action('${planA}', '${actionPause}');
@@ -502,6 +555,7 @@ BEGIN
     OR has_table_privilege('authenticated', 'public.actions', 'DELETE')
     OR has_column_privilege('authenticated', 'public.actions', 'status', 'UPDATE')
     OR has_column_privilege('authenticated', 'public.actions', 'started_at', 'UPDATE')
+    OR has_column_privilege('authenticated', 'public.actions', 'accumulated_active_seconds', 'UPDATE')
     OR has_column_privilege('authenticated', 'public.actions', 'user_id', 'UPDATE')
     OR has_table_privilege('authenticated', 'public.plan_items', 'INSERT')
     OR has_table_privilege('authenticated', 'public.plan_items', 'UPDATE')

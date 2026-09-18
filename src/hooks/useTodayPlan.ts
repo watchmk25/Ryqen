@@ -12,8 +12,11 @@ type TodayOperation = Exclude<TodayMutationOperation, 'capture' | 'check_in'>
 export function useTodayPlan(userId: string | undefined) {
   const service = useMemo(() => new TodayService(new SupabaseRyqenRepository()), [])
   const [state, setState] = useState<TodayPlanState | null>(null)
+  const stateRef = useRef<TodayPlanState | null>(null)
   const [loading, setLoading] = useState(Boolean(userId))
   const [pendingActionId, setPendingActionId] = useState<string | null>(null)
+  const [pendingOperation, setPendingOperation] = useState<TodayOperation | null>(null)
+  const pendingActionRef = useRef<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [checkingIn, setCheckingIn] = useState(false)
   const [error, setError] = useState<TodayCommandError | null>(null)
@@ -31,9 +34,14 @@ export function useTodayPlan(userId: string | undefined) {
     setAvailability(next)
   }, [])
 
+  const replaceState = useCallback((nextState: TodayPlanState | null) => {
+    stateRef.current = nextState
+    setState(nextState)
+  }, [])
+
   const reload = useCallback(async ({ preserveError = false }: { preserveError?: boolean } = {}) => {
     if (!userId) {
-      setState(null)
+      replaceState(null)
       setLoading(false)
       setAcknowledgement(null)
       applyAvailability({ type: 'reset' })
@@ -46,7 +54,7 @@ export function useTodayPlan(userId: string | undefined) {
     if (!preserveError) setAcknowledgement(null)
     if (!preserveError) applyError({ type: 'clear' })
     try {
-      setState(await service.planToday(userId))
+      replaceState(await service.planToday(userId))
       applyAvailability({ type: 'reload_succeeded' })
       applyError({ type: 'reload_succeeded', preserveExisting: preserveError })
     } catch (error) {
@@ -57,7 +65,7 @@ export function useTodayPlan(userId: string | undefined) {
     } finally {
       setLoading(false)
     }
-  }, [applyAvailability, applyError, service, userId])
+  }, [applyAvailability, applyError, replaceState, service, userId])
 
   useEffect(() => {
     void reload()
@@ -65,17 +73,24 @@ export function useTodayPlan(userId: string | undefined) {
 
   const perform = useCallback(async (operation: TodayOperation, actionId: string) => {
     if (!userId || !canMutateToday(availabilityRef.current)) return
+    if (pendingActionRef.current === actionId) return
 
+    pendingActionRef.current = actionId
     setPendingActionId(actionId)
+    setPendingOperation(operation)
     setAcknowledgement(null)
     applyError({ type: 'clear' })
     try {
+      const currentState = stateRef.current
+      if ((operation === 'pause' || operation === 'resume') && !currentState) {
+        throw new Error('Today is unavailable')
+      }
       const nextState = operation === 'start'
         ? await service.startAction(userId, actionId)
         : operation === 'pause'
-          ? await service.pauseAction(userId, actionId)
+          ? await service.pauseAction(currentState!, actionId)
           : operation === 'resume'
-            ? await service.resumeAction(userId, actionId)
+            ? await service.resumeAction(currentState!, actionId)
         : operation === 'complete'
           ? await service.completeAction(userId, actionId)
           : operation === 'defer'
@@ -83,7 +98,7 @@ export function useTodayPlan(userId: string | undefined) {
             : operation === 'skip'
               ? await service.skipPlanItem(userId, actionId)
               : await service.reconsiderDeferredAction(userId, actionId)
-      setState(nextState)
+      replaceState(nextState)
       applyAvailability({ type: 'received_current_state' })
       setAcknowledgement(operation === 'reconsider'
         ? acknowledgementForTodayAction(nextState, actionId, 'reconsidered')
@@ -95,9 +110,13 @@ export function useTodayPlan(userId: string | undefined) {
         : { type: 'mutation_failed', operation })
       await reload({ preserveError: true })
     } finally {
-      setPendingActionId(null)
+      if (pendingActionRef.current === actionId) {
+        pendingActionRef.current = null
+        setPendingActionId(null)
+        setPendingOperation(null)
+      }
     }
-  }, [applyAvailability, applyError, reload, service, userId])
+  }, [applyAvailability, applyError, reload, replaceState, service, userId])
 
   const captureAction = useCallback(async (input: WorkCaptureInput): Promise<boolean> => {
     if (!userId || !canMutateToday(availabilityRef.current)) return false
@@ -107,7 +126,7 @@ export function useTodayPlan(userId: string | undefined) {
     applyError({ type: 'clear' })
     try {
       const result = await service.captureAction(userId, input)
-      setState(result.state)
+      replaceState(result.state)
       applyAvailability({ type: 'received_current_state' })
       setAcknowledgement(acknowledgementForTodayAction(result.state, result.capturedActionId, 'captured'))
       applyError({ type: 'mutation_succeeded' })
@@ -121,7 +140,7 @@ export function useTodayPlan(userId: string | undefined) {
     } finally {
       setCapturing(false)
     }
-  }, [applyAvailability, applyError, reload, service, userId])
+  }, [applyAvailability, applyError, reload, replaceState, service, userId])
 
   const applyTodayCheckIn = useCallback(async (input: TodayCheckInInput): Promise<boolean> => {
     if (!userId || !canMutateToday(availabilityRef.current)) return false
@@ -131,7 +150,7 @@ export function useTodayPlan(userId: string | undefined) {
     applyError({ type: 'clear' })
     try {
       const nextState = await service.applyTodayCheckIn(userId, input)
-      setState(nextState)
+      replaceState(nextState)
       applyAvailability({ type: 'received_current_state' })
       applyError({ type: 'mutation_succeeded' })
       return true
@@ -144,12 +163,13 @@ export function useTodayPlan(userId: string | undefined) {
     } finally {
       setCheckingIn(false)
     }
-  }, [applyAvailability, applyError, reload, service, userId])
+  }, [applyAvailability, applyError, reload, replaceState, service, userId])
 
   return {
     state,
     loading,
     pendingActionId,
+    pendingOperation,
     capturing,
     checkingIn,
     error,

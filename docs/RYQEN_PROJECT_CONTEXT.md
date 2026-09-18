@@ -194,7 +194,7 @@ The engineering audit found:
 - Current XP logic is unsafe: quest toggling can overwrite lifetime XP with only today's completed-quest XP.
 - Focus XP has a stale-state/race problem.
 - There is no XP event ledger or server-authoritative award operation yet.
-- The repository now contains the remote baseline plus additive V0.1 Supabase migrations for the Ryqen core model, Today integrity, Work Capture/effort/elapsed time, lifecycle hardening, lock ordering, and reconciliation eligibility.
+- The repository now contains the remote baseline plus additive V0.1 Supabase migrations for the Ryqen core model, Today integrity, Work Capture/effort/elapsed time, lifecycle hardening, lock ordering, reconciliation eligibility, and accumulated active-time lifecycle timing. Actions retain durable accumulated active seconds across Pause/Resume, while `started_at` represents only the current open session.
 - RLS enforces user ownership. Meaningful Today lifecycle changes are protected by server-side RPCs with explicit authentication, ownership, transition validation, atomic Activity writes where applicable, and restricted direct client mutation paths. Progression/XP integrity remains a separate legacy concern.
 - Existing rank definitions conflict and rank does not currently progress correctly.
 - Focused domain, service, and local Supabase integration tests are established. CI has not been established as part of this V0.1 work.

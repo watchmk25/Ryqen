@@ -8,7 +8,7 @@ const userId = 'user-1'
 function createAction(id, overrides = {}) {
   return {
     id, userId, taskId: null, projectId: null, goalId: null, title: id, description: null,
-    status: 'pending', importance: 3, estimatedMinutes: 15, dueAt: null, startedAt: null,
+    status: 'pending', importance: 3, estimatedMinutes: 15, dueAt: null, accumulatedActiveSeconds: 0, startedAt: null,
     createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', ...overrides,
   }
 }
@@ -21,19 +21,43 @@ class MemoryRyqenRepository {
     this.activities = []
     this.captureInputs = []
     this.sequence = 0
-    this.todayBackendContractVersion = 2
+    this.todayBackendContractVersion = 3
     this.todayBackendContractError = null
     this.todayBackendContractChecks = 0
+    this.planningLoads = 0
+    this.reconciliations = 0
+    this.currentTime = new Date(now)
   }
 
   clone(value) { return structuredClone(value) }
   nextId(prefix) { this.sequence += 1; return `${prefix}-${this.sequence}` }
+  advanceSeconds(seconds) { this.currentTime = new Date(this.currentTime.getTime() + seconds * 1000) }
+  sessionSeconds(action) {
+    if (!action.startedAt) return 0
+    const started = new Date(action.startedAt)
+    const endOfStartedDay = new Date(started)
+    endOfStartedDay.setUTCHours(24, 0, 0, 0)
+    return Math.max(0, Math.floor((Math.min(this.currentTime.getTime(), endOfStartedDay.getTime()) - started.getTime()) / 1000))
+  }
+  flushActiveSession(action) {
+    const seconds = this.sessionSeconds(action)
+    action.accumulatedActiveSeconds += seconds
+    action.startedAt = null
+    return seconds
+  }
+  recordActivity(action, planItem, type, metadata = {}) {
+    this.activities.push({
+      id: this.nextId('activity'), userId, actionId: action.id, taskId: action.taskId, type,
+      metadata: { plan_item_id: planItem.id, ...metadata }, occurredAt: this.currentTime.toISOString(), createdAt: this.currentTime.toISOString(),
+    })
+  }
   async getTodayBackendContractVersion() {
     this.todayBackendContractChecks += 1
     if (this.todayBackendContractError) throw this.todayBackendContractError
     return this.todayBackendContractVersion
   }
   async loadPlanningData(ownerId) {
+    this.planningLoads += 1
     const owns = (item) => item.userId === ownerId
     return this.clone({
       contexts: this.data.contexts.filter(owns),
@@ -77,6 +101,7 @@ class MemoryRyqenRepository {
     return items.find((item) => item.actionId === actionId) ?? null
   }
   async reconcileTodayPlan(input) {
+    this.reconciliations += 1
     const plan = this.plans.find((candidate) => candidate.id === input.dailyPlanId && candidate.planDate === input.planDate && candidate.status === 'active')
     if (!plan || input.items.length > 3 || new Set(input.items.map((item) => item.actionId)).size !== input.items.length) {
       throw new Error('Invalid planner reconciliation')
@@ -118,28 +143,39 @@ class MemoryRyqenRepository {
     }
     if (actionStatus) {
       action.status = actionStatus
-      if (actionStatus === 'in_progress') action.startedAt = new Date(now.getTime() + this.sequence * 1000).toISOString()
+      if (actionStatus === 'in_progress') action.startedAt = this.currentTime.toISOString()
     }
     if (planItemStatus) planItem.status = planItemStatus
-    for (const type of activityTypes) {
-      this.activities.push({
-        id: this.nextId('activity'), userId, actionId, taskId: action.taskId, type,
-        metadata: { plan_item_id: planItem.id }, occurredAt: now.toISOString(), createdAt: now.toISOString(),
-      })
-    }
+    for (const type of activityTypes) this.recordActivity(action, planItem, type)
     return this.clone({ action, planItem })
   }
   async startTodayAction(planId, actionId) {
     return this.mutateTodayAction(planId, actionId, ['pending'], ['pending'], 'in_progress', 'in_progress', ['action_started', 'plan_item_started'])
   }
   async pauseTodayAction(planId, actionId) {
-    return this.mutateTodayAction(planId, actionId, ['in_progress'], ['in_progress'], 'paused', 'paused', ['action_paused'])
+    const action = this.data.actions.find((item) => item.id === actionId)
+    const planItem = this.planItems.find((item) => item.dailyPlanId === planId && item.actionId === actionId)
+    if (!action || !planItem || action.status !== 'in_progress' || planItem.status !== 'in_progress') throw new Error('Invalid atomic Today action operation')
+    this.flushActiveSession(action)
+    action.status = 'paused'; planItem.status = 'paused'
+    this.recordActivity(action, planItem, 'action_paused')
+    return this.clone({ action, planItem })
   }
   async resumeTodayAction(planId, actionId) {
     return this.mutateTodayAction(planId, actionId, ['paused'], ['paused'], 'in_progress', 'in_progress', ['action_resumed'])
   }
   async completeTodayAction(planId, actionId) {
-    return this.mutateTodayAction(planId, actionId, ['in_progress'], ['in_progress'], 'completed', 'completed', ['action_completed', 'plan_item_completed'])
+    const action = this.data.actions.find((item) => item.id === actionId)
+    const planItem = this.planItems.find((item) => item.dailyPlanId === planId && item.actionId === actionId)
+    if (!action || !planItem || action.status !== 'in_progress' || planItem.status !== 'in_progress') throw new Error('Invalid atomic Today action operation')
+    this.flushActiveSession(action)
+    action.status = 'completed'; planItem.status = 'completed'
+    const metadata = planItem.estimatedMinutes == null
+      ? { active_seconds: action.accumulatedActiveSeconds }
+      : { target_minutes: planItem.estimatedMinutes, active_seconds: action.accumulatedActiveSeconds, delta_seconds: action.accumulatedActiveSeconds - planItem.estimatedMinutes * 60 }
+    this.recordActivity(action, planItem, 'action_completed', metadata)
+    this.recordActivity(action, planItem, 'plan_item_completed')
+    return this.clone({ action, planItem })
   }
   async deferTodayAction(planId, actionId) {
     const action = this.data.actions.find((item) => item.id === actionId)
@@ -147,7 +183,10 @@ class MemoryRyqenRepository {
     const matchingPending = action?.status === 'pending' && planItem?.status === 'pending'
     const matchingProgress = action?.status === 'in_progress' && planItem?.status === 'in_progress'
     if (!matchingPending && !matchingProgress) throw new Error('Invalid atomic Today action operation')
-    return this.mutateTodayAction(planId, actionId, [action.status], [planItem.status], 'deferred', 'deferred', ['action_deferred'])
+    if (action.status === 'in_progress') this.flushActiveSession(action)
+    action.status = 'deferred'; planItem.status = 'deferred'
+    this.recordActivity(action, planItem, 'action_deferred')
+    return this.clone({ action, planItem })
   }
   async skipTodayPlanItem(planId, actionId) {
     return this.mutateTodayAction(planId, actionId, ['pending'], ['pending'], null, 'skipped', ['plan_item_skipped'])
@@ -176,40 +215,46 @@ test('start, complete, defer, and explicit reconsideration preserve valid action
   await service.planToday(userId, now)
   await service.startAction(userId, 'action-1', now)
   await service.completeAction(userId, 'action-1', now)
-  const completedStartedAt = repository.data.actions.find((action) => action.id === 'action-1').startedAt
-  assert.ok(completedStartedAt)
+  assert.equal(repository.data.actions.find((action) => action.id === 'action-1').startedAt, null)
   await service.deferAction(userId, 'action-2', now)
   assert.equal(repository.data.actions.find((action) => action.id === 'action-2').status, 'deferred')
 
   await service.reconsiderDeferredAction(userId, 'action-2', now)
   assert.equal(repository.data.actions.find((action) => action.id === 'action-2').status, 'pending')
-  assert.equal(repository.data.actions.find((action) => action.id === 'action-1').startedAt, completedStartedAt)
+  assert.equal(repository.data.actions.find((action) => action.id === 'action-1').accumulatedActiveSeconds, 0)
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
     'action_started', 'plan_item_started', 'action_completed', 'plan_item_completed', 'action_deferred',
   ])
 })
 
-test('Pause and Resume persist matching lifecycle state, reset the active-session timer, and preserve fresh slots', async () => {
+test('Pause and Resume preserve accumulated active time and fresh slots without replanning', async () => {
   const repository = new MemoryRyqenRepository([
     createAction('active'), createAction('pending-1'), createAction('pending-2'), createAction('pending-3'), createAction('pending-4'),
   ])
   const service = new TodayService(repository)
 
-  await service.startAction(userId, 'active', now)
+  const started = await service.startAction(userId, 'active', now)
   const initialStartedAt = repository.data.actions.find((action) => action.id === 'active').startedAt
-  const paused = await service.pauseAction(userId, 'active', now)
+  const planningLoadsBeforePause = repository.planningLoads
+  const reconciliationsBeforePause = repository.reconciliations
+  repository.advanceSeconds(600)
+  const paused = await service.pauseAction(started, 'active')
 
   assert.equal(repository.data.actions.find((action) => action.id === 'active').status, 'paused')
+  assert.equal(repository.data.actions.find((action) => action.id === 'active').accumulatedActiveSeconds, 600)
+  assert.equal(repository.data.actions.find((action) => action.id === 'active').startedAt, null)
   assert.equal(repository.planItems.find((item) => item.actionId === 'active')?.status, 'paused')
   assert.deepEqual(paused.activeWork, [])
   assert.deepEqual(paused.pausedWork.map((work) => work.action.id), ['active'])
   assert.equal(paused.priorities.some((priority) => priority.action.id === 'active'), false)
-  await assert.rejects(() => service.pauseAction(userId, 'active', now), /There is no in-progress plan item/)
+  await assert.rejects(() => service.pauseAction(paused, 'active'), /There is no in-progress plan item/)
 
-  const resumed = await service.resumeAction(userId, 'active', now)
+  repository.advanceSeconds(300)
+  const resumed = await service.resumeAction(paused, 'active')
   assert.equal(repository.data.actions.find((action) => action.id === 'active').status, 'in_progress')
   assert.equal(repository.planItems.find((item) => item.actionId === 'active')?.status, 'in_progress')
   assert.notEqual(repository.data.actions.find((action) => action.id === 'active').startedAt, initialStartedAt)
+  assert.equal(repository.data.actions.find((action) => action.id === 'active').accumulatedActiveSeconds, 600)
   assert.deepEqual(resumed.pausedWork, [])
   assert.deepEqual(resumed.activeWork.map((work) => work.action.id), ['active'])
   assert.equal(resumed.priorities.length, 3)
@@ -217,7 +262,71 @@ test('Pause and Resume persist matching lifecycle state, reset the active-sessio
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
     'action_started', 'plan_item_started', 'action_paused', 'action_resumed',
   ])
-  await assert.rejects(() => service.resumeAction(userId, 'active', now), /There is no paused plan item/)
+  assert.equal(repository.planningLoads, planningLoadsBeforePause)
+  assert.equal(repository.reconciliations, reconciliationsBeforePause)
+  await assert.rejects(() => service.resumeAction(resumed, 'active'), /There is no paused plan item/)
+})
+
+test('multiple Pause/Resume sessions flush exactly once and completion stores immutable timing metadata', async () => {
+  const repository = new MemoryRyqenRepository([createAction('timed', { estimatedMinutes: 30 })])
+  const service = new TodayService(repository)
+  let state = await service.startAction(userId, 'timed', now)
+
+  repository.advanceSeconds(600)
+  state = await service.pauseAction(state, 'timed')
+  repository.advanceSeconds(300)
+  state = await service.resumeAction(state, 'timed')
+  repository.advanceSeconds(600)
+  state = await service.pauseAction(state, 'timed')
+  repository.advanceSeconds(900)
+  state = await service.resumeAction(state, 'timed')
+  repository.advanceSeconds(420)
+  state = await service.completeAction(userId, 'timed', now)
+
+  const action = repository.data.actions.find((item) => item.id === 'timed')
+  const completion = repository.activities.find((activity) => activity.type === 'action_completed')
+  assert.equal(action?.status, 'completed')
+  assert.equal(action?.startedAt, null)
+  assert.equal(action?.accumulatedActiveSeconds, 1620)
+  assert.deepEqual(completion?.metadata, {
+    plan_item_id: repository.planItems.find((item) => item.actionId === 'timed')?.id,
+    target_minutes: 30,
+    active_seconds: 1620,
+    delta_seconds: -180,
+  })
+  assert.deepEqual(state.activeWork, [])
+})
+
+test('an active Defer flushes timing, while retrying Pause cannot double-count', async () => {
+  const repository = new MemoryRyqenRepository([createAction('timed')])
+  const service = new TodayService(repository)
+  let state = await service.startAction(userId, 'timed', now)
+  repository.advanceSeconds(600)
+  state = await service.pauseAction(state, 'timed')
+  await assert.rejects(() => service.pauseAction(state, 'timed'), /There is no in-progress plan item/)
+  assert.equal(repository.data.actions[0].accumulatedActiveSeconds, 600)
+
+  state = await service.resumeAction(state, 'timed')
+  repository.advanceSeconds(420)
+  await service.deferAction(userId, 'timed', now)
+  assert.equal(repository.data.actions[0].status, 'deferred')
+  assert.equal(repository.data.actions[0].startedAt, null)
+  assert.equal(repository.data.actions[0].accumulatedActiveSeconds, 1020)
+})
+
+test('completion without a plan-item target records active seconds without a fabricated target or delta', async () => {
+  const repository = new MemoryRyqenRepository([createAction('untargeted')])
+  const service = new TodayService(repository)
+  await service.startAction(userId, 'untargeted', now)
+  repository.planItems.find((item) => item.actionId === 'untargeted').estimatedMinutes = null
+  repository.advanceSeconds(120)
+  await service.completeAction(userId, 'untargeted', now)
+
+  const completion = repository.activities.find((activity) => activity.type === 'action_completed')
+  assert.deepEqual(completion?.metadata, {
+    plan_item_id: repository.planItems.find((item) => item.actionId === 'untargeted')?.id,
+    active_seconds: 120,
+  })
 })
 
 test('rejects a retry without duplicating atomic start activities', async () => {
@@ -241,8 +350,9 @@ test('records a new start timestamp when a deferred action is started again', as
   await service.startAction(userId, 'action-1', now)
   const firstStartedAt = repository.data.actions[0].startedAt
   await service.deferAction(userId, 'action-1', now)
-  assert.equal(repository.data.actions[0].startedAt, firstStartedAt)
+  assert.equal(repository.data.actions[0].startedAt, null)
   await service.reconsiderDeferredAction(userId, 'action-1', now)
+  repository.advanceSeconds(1)
   await service.startAction(userId, 'action-1', now)
 
   assert.notEqual(repository.data.actions[0].startedAt, firstStartedAt)
@@ -677,8 +787,8 @@ test('overnight paused work remains recoverable through its historical lifecycle
   const dayOne = new Date(2026, 8, 12, 9, 0, 0)
   const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
 
-  await service.startAction(userId, 'paused-action', dayOne)
-  await service.pauseAction(userId, 'paused-action', dayOne)
+  const started = await service.startAction(userId, 'paused-action', dayOne)
+  await service.pauseAction(started, 'paused-action')
   const yesterdayPlanId = repository.plans[0].id
   const overnight = await service.planToday(userId, dayTwo)
 
@@ -689,7 +799,7 @@ test('overnight paused work remains recoverable through its historical lifecycle
   assert.equal(overnight.pausedWork[0].planItem.dailyPlanId, yesterdayPlanId)
   assert.deepEqual(overnight.priorities, [])
 
-  const resumed = await service.resumeAction(userId, 'paused-action', dayTwo)
+  const resumed = await service.resumeAction(overnight, 'paused-action')
   assert.equal(repository.data.actions.find((action) => action.id === 'paused-action')?.status, 'in_progress')
   assert.deepEqual(resumed.pausedWork, [])
   assert.deepEqual(resumed.activeWork.map((work) => work.action.id), ['paused-action'])

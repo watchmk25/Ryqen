@@ -2,7 +2,7 @@
  * The minimum hosted-Supabase API contract required by the V0.1 Today flow.
  * Bump only when a backend change is not backward-compatible with this client.
  */
-export const TODAY_BACKEND_CONTRACT_VERSION = 2
+export const TODAY_BACKEND_CONTRACT_VERSION = 3
 
 export type TodayBackendCompatibilityReason = 'missing' | 'unsupported'
 

@@ -193,7 +193,7 @@ Important state transitions are validated independently of UI and future AI inpu
 
 Meaningful Today lifecycle mutations use protected Supabase RPC boundaries. Those functions authenticate through `auth.uid()`, explicitly verify record ownership, validate the expected state transition, perform related writes atomically, and record lifecycle Activities atomically where the transition requires them.
 
-Pause is a persisted lifecycle state, distinct from Defer: `in_progress -> paused -> in_progress`. A Pause preserves its historical Plan Item anchor, removes the Action from Active Work and fresh recommendations, and requires explicit Resume. Resume records a new `started_at` for the current active session. Defer instead moves work out of the immediate context and requires explicit Reconsider before it can become pending again.
+Pause is a persisted lifecycle state, distinct from Defer: `in_progress -> paused -> in_progress`. A Pause preserves its historical Plan Item anchor, removes the Action from Active Work and fresh recommendations, and requires explicit Resume. `actions.started_at` marks only the current open active session; `actions.accumulated_active_seconds` stores previously closed active sessions. Pause and active Defer flush the open session server-side and clear `started_at`; Resume opens a new session while preserving accumulated time; Complete flushes and persists the final total. Pause/Resume patch Today from the authoritative RPC response and do not run a planner reconciliation solely for that state change. Defer instead moves work out of the immediate context and requires explicit Reconsider before it can become pending again.
 
 Authenticated clients cannot directly write Activities or mutate Plan Items. Direct Action updates are limited to ordinary planning fields; lifecycle fields such as Action status and `started_at` remain RPC-controlled. The protected functions are `SECURITY DEFINER`, run with an empty `search_path`, and retain explicit `auth.uid()` and ownership checks rather than relying on definer privileges or RLS as the authorization decision.
 
@@ -216,7 +216,7 @@ Reconciliation cannot use an invalid lifecycle Action to create a fresh pending 
 ### Hosted backend compatibility
 
 The Today client requires the authenticated read-only backend contract RPC
-`ryqen_today_backend_contract`, currently contract version `1`, before it
+`ryqen_today_backend_contract`, currently contract version `3`, before it
 loads plans or requests a Today mutation. This is a safety net that presents a
 clear backend-update message when the endpoint is absent or its version is
 unsupported; ordinary network/request failures remain ordinary Today refresh

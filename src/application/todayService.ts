@@ -3,7 +3,7 @@ import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayChec
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
 import { assertTodayBackendContractVersion } from '../domain/todayBackendContract'
 import type { ActiveWork, DeferredWork, PausedWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
-import type { RyqenRepository } from '../data/ryqenRepository'
+import type { RyqenRepository, TodayActionMutationResult } from '../data/ryqenRepository'
 
 export interface TodayCaptureResult {
   state: TodayPlanState
@@ -69,6 +69,66 @@ function pausedWorkFor(planItems: PlanItem[], data: PlanningData): PausedWork[] 
     const planItem = latestByAction.get(action.id)
     return planItem ? [{ action, planItem }] : []
   })
+}
+
+function replaceAction(actions: TodayPlanState['actions'], action: TodayActionMutationResult['action']): TodayPlanState['actions'] {
+  return actions.map((item) => item.id === action.id ? action : item)
+}
+
+function replaceCurrentPlanItem(planItems: PlanItem[], planItem: PlanItem): PlanItem[] {
+  return planItems.map((item) => item.id === planItem.id ? planItem : item)
+}
+
+function activeWorkFromMutation(
+  result: TodayActionMutationResult,
+  previous: ActiveWork | undefined,
+): ActiveWork {
+  if (previous) return { ...previous, action: result.action, planItem: result.planItem }
+  return {
+    action: result.action,
+    task: null,
+    project: null,
+    goal: null,
+    estimatedMinutes: result.planItem.estimatedMinutes ?? result.action.estimatedMinutes ?? 30,
+    priorityScore: result.planItem.priorityScore,
+    rationale: result.planItem.rationale ?? 'Already in progress',
+    planItem: result.planItem,
+  }
+}
+
+/** Applies only the protected Pause/Resume RPC result; it never replans. */
+function applyPauseResumeMutation(
+  state: TodayPlanState,
+  result: TodayActionMutationResult,
+  operation: 'pause' | 'resume',
+): TodayPlanState {
+  const nextActions = replaceAction(state.actions, result.action)
+  const nextPlanItems = replaceCurrentPlanItem(state.planItems, result.planItem)
+
+  if (operation === 'pause') {
+    return {
+      ...state,
+      actions: nextActions,
+      planItems: nextPlanItems,
+      activeWork: state.activeWork.filter((work) => work.action.id !== result.action.id),
+      pausedWork: [
+        ...state.pausedWork.filter((work) => work.action.id !== result.action.id),
+        { action: result.action, planItem: result.planItem },
+      ],
+    }
+  }
+
+  const previousActiveWork = state.activeWork.find((work) => work.action.id === result.action.id)
+  return {
+    ...state,
+    actions: nextActions,
+    planItems: nextPlanItems,
+    activeWork: [
+      ...state.activeWork.filter((work) => work.action.id !== result.action.id),
+      activeWorkFromMutation(result, previousActiveWork),
+    ],
+    pausedWork: state.pausedWork.filter((work) => work.action.id !== result.action.id),
+  }
 }
 
 /**
@@ -204,20 +264,22 @@ export class TodayService {
     return this.planToday(userId, now)
   }
 
-  async pauseAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    await this.planToday(userId, now)
-    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
-    if (!planItem) throw new Error('There is no in-progress plan item for this action')
-    await this.repository.pauseTodayAction(planItem.dailyPlanId, actionId)
-    return this.planToday(userId, now)
+  async pauseAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const activeWork = state.activeWork.find((work) => work.action.id === actionId)
+    if (!activeWork?.planItem || activeWork.action.status !== 'in_progress') {
+      throw new Error('There is no in-progress plan item for this action')
+    }
+    const result = await this.repository.pauseTodayAction(activeWork.planItem.dailyPlanId, actionId)
+    return applyPauseResumeMutation(state, result, 'pause')
   }
 
-  async resumeAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    await this.planToday(userId, now)
-    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'paused')
-    if (!planItem) throw new Error('There is no paused plan item for this action')
-    await this.repository.resumeTodayAction(planItem.dailyPlanId, actionId)
-    return this.planToday(userId, now)
+  async resumeAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const pausedWork = state.pausedWork.find((work) => work.action.id === actionId)
+    if (!pausedWork || pausedWork.action.status !== 'paused') {
+      throw new Error('There is no paused plan item for this action')
+    }
+    const result = await this.repository.resumeTodayAction(pausedWork.planItem.dailyPlanId, actionId)
+    return applyPauseResumeMutation(state, result, 'resume')
   }
 
   async deferAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {

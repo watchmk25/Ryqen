@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { canTransitionAction } from '../src/domain/actionTransitions.ts'
-import { formatElapsedTime } from '../src/domain/actionElapsed.ts'
+import { activeElapsedSeconds, formatElapsedTime } from '../src/domain/actionElapsed.ts'
 import { formatDueTiming, formatEstimatedEffort } from '../src/domain/actionTiming.ts'
 import { derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
 import { availableTimeMinutesForTodayPreset, prepareTodayCheckIn } from '../src/domain/todayCheckIn.ts'
@@ -23,6 +23,7 @@ function action(id, overrides = {}) {
     importance: 3,
     estimatedMinutes: 20,
     dueAt: null,
+    accumulatedActiveSeconds: 0,
     startedAt: null,
     createdAt: '2026-09-01T00:00:00Z',
     updatedAt: '2026-09-01T00:00:00Z',
@@ -202,10 +203,32 @@ test('enforces the approved action lifecycle', () => {
   assert.equal(canTransitionAction('completed', 'in_progress'), false)
 })
 
-test('formats foreground elapsed time from a persisted start timestamp', () => {
-  const startedAt = '2026-09-12T09:00:00Z'
-  assert.equal(formatElapsedTime(startedAt, new Date('2026-09-12T09:00:05Z')), '00:05')
-  assert.equal(formatElapsedTime(startedAt, new Date('2026-09-12T10:01:01Z')), '1:01:01')
+test('formats accumulated active time plus the current active session', () => {
+  const active = action('active', {
+    status: 'in_progress',
+    accumulatedActiveSeconds: 600,
+    startedAt: '2026-09-12T09:15:00Z',
+  })
+  assert.equal(activeElapsedSeconds(active, new Date('2026-09-12T09:22:00Z')), 1020)
+  assert.equal(formatElapsedTime(active, new Date('2026-09-12T09:22:00Z')), '17:00')
+})
+
+test('paused and completed actions retain only persisted active time', () => {
+  const paused = action('paused', { status: 'paused', accumulatedActiveSeconds: 600, startedAt: null })
+  const completed = action('completed', { status: 'completed', accumulatedActiveSeconds: 1020, startedAt: null })
+
+  assert.equal(formatElapsedTime(paused, new Date('2026-09-12T12:00:00Z')), '10:00')
+  assert.equal(formatElapsedTime(completed, new Date('2026-09-12T12:00:00Z')), '17:00')
+})
+
+test('an open previous-day session never counts overnight wall-clock time', () => {
+  const active = action('overnight', {
+    status: 'in_progress',
+    accumulatedActiveSeconds: 0,
+    startedAt: '2026-09-12T23:50:00Z',
+  })
+
+  assert.equal(activeElapsedSeconds(active, new Date('2026-09-13T09:00:00Z')), 600)
 })
 
 test('formats estimated effort and concise due timing for Today cards', () => {

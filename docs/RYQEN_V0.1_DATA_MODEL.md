@@ -254,6 +254,15 @@ An Action can belong to a Task, Project, Goal, or none of them.
 
 Standalone Actions are explicitly supported.
 
+The implemented Action timing fields are `started_at` and
+`accumulated_active_seconds`. `started_at` marks only the current open active
+session; `accumulated_active_seconds` durably stores prior closed sessions.
+Protected lifecycle RPCs flush the open session on Pause, active Defer, and
+Complete. Resume starts a new session without discarding accumulated time.
+When a target exists, the completion Activity stores immutable
+`target_minutes`, `active_seconds`, and `delta_seconds` from the lifecycle
+Plan Item snapshot.
+
 ---
 
 ## 9. Daily Plans

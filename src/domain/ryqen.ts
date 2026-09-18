@@ -85,6 +85,9 @@ export interface Action {
   importance: number
   estimatedMinutes: number | null
   dueAt: string | null
+  /** Previously closed, user-declared active sessions in seconds. */
+  accumulatedActiveSeconds: number
+  /** Start of the currently open active session; null outside in_progress. */
   startedAt: string | null
   createdAt: string
   updatedAt: string
