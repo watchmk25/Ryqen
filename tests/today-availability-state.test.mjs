@@ -35,6 +35,16 @@ test('a later successful refresh clears the unavailable state', () => {
   assert.equal(canMutateToday(refreshed), true)
 })
 
+test('a non-blocking post-lifecycle refresh preserves the availability safety boundary', () => {
+  const patchApplied = transitionTodayAvailability('current', { type: 'received_current_state' })
+  const refreshing = transitionTodayAvailability(patchApplied, { type: 'reload_started' })
+  const failed = transitionTodayAvailability(refreshing, { type: 'reload_failed' })
+
+  assert.equal(patchApplied, 'current')
+  assert.equal(canMutateToday(refreshing), false)
+  assert.equal(canMutateToday(failed), false)
+})
+
 test('reload availability does not replace mutation recovery feedback or acknowledgement behavior', () => {
   const error = transitionTodayError(null, { type: 'mutation_failed', operation: 'complete' })
   const recoveredError = transitionTodayError(error, { type: 'reload_succeeded', preserveExisting: true })

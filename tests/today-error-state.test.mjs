@@ -29,6 +29,14 @@ test('retry clears a mutation error on success and replaces it when refresh fail
   assert.match(retryFailed?.message ?? '', /Couldn't refresh Today/)
 })
 
+test('a refresh failure after a successful lifecycle patch is reported as refresh recovery, not mutation failure', () => {
+  const afterSuccessfulLifecycle = transitionTodayError(null, { type: 'mutation_succeeded' })
+  const refreshFailure = transitionTodayError(afterSuccessfulLifecycle, { type: 'reload_failed' })
+
+  assert.equal(refreshFailure?.source, 'reload')
+  assert.match(refreshFailure?.message ?? '', /Couldn't refresh Today/)
+})
+
 test('a backend compatibility failure has a distinct actionable error', () => {
   const error = transitionTodayError(null, { type: 'backend_incompatible' })
 

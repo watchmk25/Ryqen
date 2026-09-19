@@ -81,7 +81,7 @@ function replaceCurrentPlanItem(planItems: PlanItem[], planItem: PlanItem): Plan
 
 function activeWorkFromMutation(
   result: TodayActionMutationResult,
-  previous: ActiveWork | undefined,
+  previous: PriorityAction | undefined,
 ): ActiveWork {
   if (previous) return { ...previous, action: result.action, planItem: result.planItem }
   return {
@@ -93,6 +93,31 @@ function activeWorkFromMutation(
     priorityScore: result.planItem.priorityScore,
     rationale: result.planItem.rationale ?? 'Already in progress',
     planItem: result.planItem,
+  }
+}
+
+function applyStartMutation(state: TodayPlanState, result: TodayActionMutationResult, priority: PriorityAction): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, result.action),
+    planItems: replaceCurrentPlanItem(state.planItems, result.planItem),
+    priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
+    activeWork: [
+      ...state.activeWork.filter((work) => work.action.id !== result.action.id),
+      activeWorkFromMutation(result, priority),
+    ],
+  }
+}
+
+function applyCompleteMutation(state: TodayPlanState, result: TodayActionMutationResult): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, result.action),
+    // This only replaces an item already in today's snapshot. A cross-day
+    // lifecycle anchor belongs to its historical plan and is never inserted.
+    planItems: replaceCurrentPlanItem(state.planItems, result.planItem),
+    priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
+    activeWork: state.activeWork.filter((work) => work.action.id !== result.action.id),
   }
 }
 
@@ -249,19 +274,23 @@ export class TodayService {
     return this.planToday(userId, now)
   }
 
-  async startAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    const state = await this.planToday(userId, now)
-    if (!state.plan) throw new Error('There is no active Today plan for this action')
-    await this.repository.startTodayAction(state.plan.id, actionId)
-    return this.planToday(userId, now)
+  async startAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const priority = state.priorities.find((item) => item.action.id === actionId)
+    const planItem = state.planItems.find((item) => item.actionId === actionId && item.status === 'pending')
+    if (!state.plan || !priority || priority.action.status !== 'pending' || !planItem || planItem.dailyPlanId !== state.plan.id) {
+      throw new Error('There is no pending Today plan item for this action')
+    }
+    const result = await this.repository.startTodayAction(planItem.dailyPlanId, actionId)
+    return applyStartMutation(state, result, priority)
   }
 
-  async completeAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    await this.planToday(userId, now)
-    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
-    if (!planItem) throw new Error('There is no in-progress plan item for this action')
-    await this.repository.completeTodayAction(planItem.dailyPlanId, actionId)
-    return this.planToday(userId, now)
+  async completeAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const activeWork = state.activeWork.find((work) => work.action.id === actionId)
+    if (!activeWork?.planItem || activeWork.action.status !== 'in_progress') {
+      throw new Error('There is no in-progress plan item for this action')
+    }
+    const result = await this.repository.completeTodayAction(activeWork.planItem.dailyPlanId, actionId)
+    return applyCompleteMutation(state, result)
   }
 
   async pauseAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {

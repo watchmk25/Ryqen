@@ -342,7 +342,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
           onPress={() => isInProgress ? onComplete(priority.action.id) : onStart(priority.action.id)}
           style={{ flex: 1, height: 44, backgroundColor: disabled ? C.surface2 : C.accent, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{pending && pendingOperation === 'complete' ? 'Completing...' : isInProgress ? 'Complete' : 'Start'}</Text>
+          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{pending && pendingOperation === 'start' ? 'Starting...' : pending && pendingOperation === 'complete' ? 'Completing...' : isInProgress ? 'Complete' : 'Start'}</Text>
         </TouchableOpacity>
         {isInProgress && (
           <TouchableOpacity

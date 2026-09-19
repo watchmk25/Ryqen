@@ -39,7 +39,7 @@ export function useTodayPlan(userId: string | undefined) {
     setState(nextState)
   }, [])
 
-  const reload = useCallback(async ({ preserveError = false }: { preserveError?: boolean } = {}) => {
+  const revalidate = useCallback(async ({ preserveError = false, blocking = true }: { preserveError?: boolean; blocking?: boolean } = {}) => {
     if (!userId) {
       replaceState(null)
       setLoading(false)
@@ -49,7 +49,7 @@ export function useTodayPlan(userId: string | undefined) {
       return
     }
 
-    setLoading(true)
+    if (blocking) setLoading(true)
     applyAvailability({ type: 'reload_started' })
     if (!preserveError) setAcknowledgement(null)
     if (!preserveError) applyError({ type: 'clear' })
@@ -63,9 +63,13 @@ export function useTodayPlan(userId: string | undefined) {
         ? { type: 'backend_incompatible' }
         : { type: 'reload_failed' })
     } finally {
-      setLoading(false)
+      if (blocking) setLoading(false)
     }
   }, [applyAvailability, applyError, replaceState, service, userId])
+
+  const reload = useCallback(async ({ preserveError = false }: { preserveError?: boolean } = {}) => {
+    await revalidate({ preserveError, blocking: true })
+  }, [revalidate])
 
   useEffect(() => {
     void reload()
@@ -82,17 +86,17 @@ export function useTodayPlan(userId: string | undefined) {
     applyError({ type: 'clear' })
     try {
       const currentState = stateRef.current
-      if ((operation === 'pause' || operation === 'resume') && !currentState) {
+      if ((operation === 'start' || operation === 'pause' || operation === 'resume' || operation === 'complete') && !currentState) {
         throw new Error('Today is unavailable')
       }
       const nextState = operation === 'start'
-        ? await service.startAction(userId, actionId)
+        ? await service.startAction(currentState!, actionId)
         : operation === 'pause'
           ? await service.pauseAction(currentState!, actionId)
           : operation === 'resume'
             ? await service.resumeAction(currentState!, actionId)
         : operation === 'complete'
-          ? await service.completeAction(userId, actionId)
+          ? await service.completeAction(currentState!, actionId)
           : operation === 'defer'
             ? await service.deferAction(userId, actionId)
             : operation === 'skip'
@@ -104,6 +108,12 @@ export function useTodayPlan(userId: string | undefined) {
         ? acknowledgementForTodayAction(nextState, actionId, 'reconsidered')
         : null)
       applyError({ type: 'mutation_succeeded' })
+      if (operation === 'start' || operation === 'complete') {
+        // Let React commit the authoritative lifecycle patch first. The
+        // planner then refreshes recommendations without using blocking
+        // reload(), so the correctly patched Today state stays visible.
+        setTimeout(() => { void revalidate({ blocking: false }) }, 0)
+      }
     } catch (error) {
       applyError(isTodayBackendCompatibilityError(error)
         ? { type: 'backend_incompatible' }
@@ -116,7 +126,7 @@ export function useTodayPlan(userId: string | undefined) {
         setPendingOperation(null)
       }
     }
-  }, [applyAvailability, applyError, reload, replaceState, service, userId])
+  }, [applyAvailability, applyError, reload, replaceState, revalidate, service, userId])
 
   const captureAction = useCallback(async (input: WorkCaptureInput): Promise<boolean> => {
     if (!userId || !canMutateToday(availabilityRef.current)) return false
