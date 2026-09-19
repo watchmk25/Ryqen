@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { DailySummaryRow, EditModal } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
 import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
@@ -395,7 +395,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     error,
     acknowledgement,
     isTodayUnavailable,
-    reload,
+    refreshing,
+    refreshToday,
     startAction,
     pauseAction,
     resumeAction,
@@ -462,7 +463,12 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   }
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{ paddingBottom: 24 }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refreshToday()} tintColor={C.accent} colors={[C.accent]} />}
+    >
       <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 18 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View style={{ flex: 1 }}>
@@ -537,7 +543,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
             {isTodayUnavailable && <Text style={[T.caption1, { marginTop: 4 }]}>Your displayed plan may be out of date. Refresh Today to continue.</Text>}
           </View>
           <TouchableOpacity
-            onPress={() => void reload()}
+            onPress={() => void refreshToday()}
             style={{ alignSelf: 'flex-start', backgroundColor: C.surface2, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 8 }}
           >
             <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>Refresh Today</Text>

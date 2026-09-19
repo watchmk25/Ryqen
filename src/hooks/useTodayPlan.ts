@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AppState, type AppStateStatus } from 'react-native'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
 import type { TodayCheckInInput, TodayPlanState, WorkCaptureInput } from '../domain'
@@ -6,6 +7,7 @@ import { isTodayBackendCompatibilityError } from '../domain'
 import { acknowledgementForTodayAction, type TodayAcknowledgement } from './todayAcknowledgement'
 import { canMutateToday, transitionTodayAvailability, type TodayAvailability } from './todayAvailabilityState'
 import { transitionTodayError, type TodayCommandError, type TodayMutationOperation } from './todayErrorState'
+import { isCurrentTodayRevalidation, scheduleTodayMidnightRevalidation, shouldRevalidateWhenAppBecomesActive } from './todayFreshness'
 
 type TodayOperation = Exclude<TodayMutationOperation, 'capture' | 'check_in'>
 
@@ -14,6 +16,7 @@ export function useTodayPlan(userId: string | undefined) {
   const [state, setState] = useState<TodayPlanState | null>(null)
   const stateRef = useRef<TodayPlanState | null>(null)
   const [loading, setLoading] = useState(Boolean(userId))
+  const [refreshing, setRefreshing] = useState(false)
   const [pendingActionId, setPendingActionId] = useState<string | null>(null)
   const [pendingOperation, setPendingOperation] = useState<TodayOperation | null>(null)
   const pendingActionRef = useRef<string | null>(null)
@@ -23,6 +26,7 @@ export function useTodayPlan(userId: string | undefined) {
   const [acknowledgement, setAcknowledgement] = useState<TodayAcknowledgement | null>(null)
   const [availability, setAvailability] = useState<TodayAvailability>('current')
   const availabilityRef = useRef<TodayAvailability>('current')
+  const revalidationGenerationRef = useRef(0)
 
   const applyError = useCallback((event: Parameters<typeof transitionTodayError>[1]) => {
     setError((current) => transitionTodayError(current, event))
@@ -39,10 +43,21 @@ export function useTodayPlan(userId: string | undefined) {
     setState(nextState)
   }, [])
 
-  const revalidate = useCallback(async ({ preserveError = false, blocking = true }: { preserveError?: boolean; blocking?: boolean } = {}) => {
+  const revalidate = useCallback(async ({
+    preserveError = false,
+    blocking = true,
+    showRefreshIndicator = false,
+  }: {
+    preserveError?: boolean
+    blocking?: boolean
+    showRefreshIndicator?: boolean
+  } = {}) => {
+    const generation = revalidationGenerationRef.current + 1
+    revalidationGenerationRef.current = generation
     if (!userId) {
       replaceState(null)
       setLoading(false)
+      setRefreshing(false)
       setAcknowledgement(null)
       applyAvailability({ type: 'reset' })
       applyError({ type: 'clear' })
@@ -50,20 +65,28 @@ export function useTodayPlan(userId: string | undefined) {
     }
 
     if (blocking) setLoading(true)
+    else setLoading(false)
+    setRefreshing(showRefreshIndicator)
     applyAvailability({ type: 'reload_started' })
     if (!preserveError) setAcknowledgement(null)
     if (!preserveError) applyError({ type: 'clear' })
     try {
-      replaceState(await service.planToday(userId))
+      const nextState = await service.planToday(userId)
+      if (!isCurrentTodayRevalidation(generation, revalidationGenerationRef.current)) return
+      replaceState(nextState)
       applyAvailability({ type: 'reload_succeeded' })
       applyError({ type: 'reload_succeeded', preserveExisting: preserveError })
     } catch (error) {
+      if (!isCurrentTodayRevalidation(generation, revalidationGenerationRef.current)) return
       applyAvailability({ type: 'reload_failed' })
       applyError(isTodayBackendCompatibilityError(error)
         ? { type: 'backend_incompatible' }
         : { type: 'reload_failed' })
     } finally {
-      if (blocking) setLoading(false)
+      if (isCurrentTodayRevalidation(generation, revalidationGenerationRef.current)) {
+        if (blocking) setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [applyAvailability, applyError, replaceState, service, userId])
 
@@ -71,9 +94,28 @@ export function useTodayPlan(userId: string | undefined) {
     await revalidate({ preserveError, blocking: true })
   }, [revalidate])
 
+  const refreshToday = useCallback(async () => {
+    await revalidate({ blocking: false, showRefreshIndicator: true })
+  }, [revalidate])
+
+  const revalidateToday = useCallback(() => {
+    void revalidate({ blocking: false })
+  }, [revalidate])
+
   useEffect(() => {
     void reload()
   }, [reload])
+
+  useEffect(() => {
+    let previousState: AppStateStatus | null = AppState.currentState
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (shouldRevalidateWhenAppBecomesActive(previousState, nextState)) revalidateToday()
+      previousState = nextState
+    })
+    return () => subscription.remove()
+  }, [revalidateToday])
+
+  useEffect(() => scheduleTodayMidnightRevalidation(revalidateToday), [revalidateToday])
 
   const perform = useCallback(async (operation: TodayOperation, actionId: string) => {
     if (!userId || !canMutateToday(availabilityRef.current)) return
@@ -102,6 +144,7 @@ export function useTodayPlan(userId: string | undefined) {
             : operation === 'skip'
               ? await service.skipPlanItem(userId, actionId)
               : await service.reconsiderDeferredAction(userId, actionId)
+      revalidationGenerationRef.current += 1
       replaceState(nextState)
       applyAvailability({ type: 'received_current_state' })
       setAcknowledgement(operation === 'reconsider'
@@ -112,7 +155,7 @@ export function useTodayPlan(userId: string | undefined) {
         // Let React commit the authoritative lifecycle patch first. The
         // planner then refreshes recommendations without using blocking
         // reload(), so the correctly patched Today state stays visible.
-        setTimeout(() => { void revalidate({ blocking: false }) }, 0)
+        setTimeout(revalidateToday, 0)
       }
     } catch (error) {
       applyError(isTodayBackendCompatibilityError(error)
@@ -126,7 +169,7 @@ export function useTodayPlan(userId: string | undefined) {
         setPendingOperation(null)
       }
     }
-  }, [applyAvailability, applyError, reload, replaceState, revalidate, service, userId])
+  }, [applyAvailability, applyError, reload, replaceState, revalidateToday, service, userId])
 
   const captureAction = useCallback(async (input: WorkCaptureInput): Promise<boolean> => {
     if (!userId || !canMutateToday(availabilityRef.current)) return false
@@ -178,6 +221,7 @@ export function useTodayPlan(userId: string | undefined) {
   return {
     state,
     loading,
+    refreshing,
     pendingActionId,
     pendingOperation,
     capturing,
@@ -186,6 +230,7 @@ export function useTodayPlan(userId: string | undefined) {
     acknowledgement,
     isTodayUnavailable: !canMutateToday(availability),
     reload,
+    refreshToday,
     startAction: (actionId: string) => perform('start', actionId),
     pauseAction: (actionId: string) => perform('pause', actionId),
     resumeAction: (actionId: string) => perform('resume', actionId),
