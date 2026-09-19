@@ -119,7 +119,14 @@ A concrete next step. Actions may exist independently.
 The adaptive, date-scoped snapshot of recommended work/actions for the current circumstances. Persistent Actions remain the source of lifecycle truth; cross-day Active Work, Paused Work, and Deferred Work may use historical Plan Items only as validated lifecycle/audit anchors.
 
 ### Activity / Progress
-Durable records of meaningful completed work or progress.
+Durable records of meaningful lifecycle work or progress. V0.1 exposes a
+small, read-only **Recent activity** view from Profile, interpreted from the
+existing owner-scoped `activities` table. It allow-lists meaningful Action
+lifecycle events (Started, Paused, Resumed, Completed, Deferred, and Skipped)
+while hiding technical Plan Item lifecycle records. Completion rows may show
+the existing deterministic target/active/delta metadata. This is a user-facing
+interpretation, not an internal audit/security log, analytics dashboard, or a
+new persistence model; no schema change is required.
 
 ## 6. Planning Engine
 

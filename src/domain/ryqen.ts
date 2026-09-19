@@ -127,6 +127,39 @@ export interface Activity {
   createdAt: string
 }
 
+/**
+ * Bounded, owner-scoped Activity data enriched with the current Action title
+ * for the read-only Recent Activity surface. Activity records intentionally do
+ * not retain title snapshots, so the title may be unavailable later.
+ */
+export interface ActivityHistoryRecord {
+  id: string
+  userId: string
+  actionId: string | null
+  type: string
+  metadata: JsonValue
+  occurredAt: string
+  actionTitle: string | null
+}
+
+export type UserFacingActivityType =
+  | 'action_started'
+  | 'action_paused'
+  | 'action_resumed'
+  | 'action_completed'
+  | 'action_deferred'
+  | 'plan_item_skipped'
+
+/** UI-safe interpretation of an allow-listed lifecycle Activity. */
+export interface RecentActivity {
+  id: string
+  type: UserFacingActivityType
+  label: string
+  subject: string
+  occurredAt: string
+  completionSummary: string | null
+}
+
 export interface PlanningData {
   contexts: Context[]
   goals: Goal[]

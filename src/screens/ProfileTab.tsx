@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/authStore'
 import { supabase, signOut } from '../lib/supabase'
 import { C, T, d, RANK_COLORS, STAT_COLORS, SKILLS, STAT_GROUPS } from '../constants'
 import { calcStats } from '../utils'
-import { EditModal, PickerColumn } from '../components'
+import { EditModal, PickerColumn, RecentActivityModal } from '../components'
 import { requestNotificationPermission, scheduleDailyReminder, cancelDailyReminder } from '../utils/notifications'
 import type { Character, AbilityLevel } from '../types'
 
@@ -26,6 +26,7 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
   const [hunterName, setHunterName] = useState('')
   const [photoUri, setPhotoUri] = useState<string | null>(null)
   const [viewPhoto, setViewPhoto] = useState(false)
+  const [showRecentActivity, setShowRecentActivity] = useState(false)
   const [dob, setDob] = useState({ day: '', month: '', year: '' })
   const [gender, setGender] = useState('')
   const [heightCm, setHeightCm] = useState('')
@@ -293,6 +294,20 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
         )}
       </Card>
 
+      <View style={{ marginHorizontal: 20, marginTop: 24 }}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          style={{ backgroundColor: C.surface, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+          onPress={() => setShowRecentActivity(true)}
+        >
+          <View>
+            <Text style={T.subhead}>Recent activity</Text>
+            <Text style={[T.caption1, { marginTop: 3 }]}>Meaningful lifecycle history</Text>
+          </View>
+          <Text style={{ color: C.accent, fontSize: 18 }}>›</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={{ marginHorizontal: 20, marginTop: 32 }}>
         <TouchableOpacity
           style={{ backgroundColor: C.danger + '14', borderRadius: 14, padding: 15, alignItems: 'center' }}
@@ -429,6 +444,8 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      <RecentActivityModal visible={showRecentActivity} userId={user?.id} onClose={() => setShowRecentActivity(false)} />
     </ScrollView>
   )
 }

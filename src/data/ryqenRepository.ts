@@ -1,7 +1,9 @@
 import { supabase } from '../lib/supabase'
+import { readRecentActivityRecords, type RecentActivityReadClient } from './recentActivityReader'
 import type {
   Action,
   ActionStatus,
+  ActivityHistoryRecord,
   Context,
   ContextSource,
   DailyPlan,
@@ -76,6 +78,7 @@ export interface CreateContextInput {
 export interface RyqenRepository {
   getTodayBackendContractVersion(): Promise<number>
   loadPlanningData(userId: string): Promise<PlanningData>
+  listRecentActivities(userId: string): Promise<ActivityHistoryRecord[]>
   createContexts(inputs: CreateContextInput[]): Promise<Context[]>
   findDailyPlan(userId: string, planDate: string): Promise<DailyPlan | null>
   createDailyPlan(input: CreateDailyPlanInput): Promise<DailyPlan>
@@ -240,6 +243,10 @@ export class SupabaseRyqenRepository implements RyqenRepository {
       tasks: (unwrap(tasksResult.data, tasksResult.error, 'Load tasks') as DatabaseRow[]).map(mapTask),
       actions: (unwrap(actionsResult.data, actionsResult.error, 'Load actions') as DatabaseRow[]).map(mapAction),
     }
+  }
+
+  async listRecentActivities(userId: string): Promise<ActivityHistoryRecord[]> {
+    return readRecentActivityRecords(supabase as unknown as RecentActivityReadClient, userId)
   }
 
   async createContexts(inputs: CreateContextInput[]): Promise<Context[]> {
