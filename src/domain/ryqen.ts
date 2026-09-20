@@ -84,6 +84,11 @@ export interface Action {
   status: ActionStatus
   importance: number
   estimatedMinutes: number | null
+  /** Authoritative local calendar deadline for new V0.1 Actions. */
+  dueDate: string | null
+  /** Optional exact local clock time; valid only when dueDate exists. */
+  dueTime: string | null
+  /** Legacy timestamp retained only to read pre-temporal-model Actions. */
   dueAt: string | null
   /** Previously closed, user-declared active sessions in seconds. */
   accumulatedActiveSeconds: number

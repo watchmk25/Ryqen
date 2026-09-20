@@ -263,6 +263,23 @@ When a target exists, the completion Activity stores immutable
 `target_minutes`, `active_seconds`, and `delta_seconds` from the lifecycle
 Plan Item snapshot.
 
+### Action temporal precision
+
+Actions retain legacy `due_at` temporarily for compatibility with records and
+clients created before temporal precision. New V0.1 standalone Action capture
+uses authoritative local-calendar fields instead:
+
+- `due_date date NULL` is the optional calendar deadline.
+- `due_time time NULL` is optional exact local-clock precision and is valid
+  only when `due_date` exists.
+
+A date without a time means "due on this date," not an invented end-of-day
+deadline. New capture therefore does not populate `due_at`; readers prefer
+`due_date`/`due_time` and use legacy `due_at` only when the new date is absent.
+Planner scoring remains date-level in V0.1. Action-specific reminders remain a
+separate future notification-intent capability and are intentionally not part
+of this model change.
+
 ---
 
 ## 9. Daily Plans

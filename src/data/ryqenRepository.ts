@@ -59,7 +59,8 @@ export interface TodayActionMutationResult {
 export interface CreateCapturedActionInput {
   title: string
   importance: number
-  dueAt: string | null
+  dueDate: string | null
+  dueTime: string | null
   estimatedMinutes: number
 }
 
@@ -168,7 +169,8 @@ function mapAction(row: DatabaseRow): Action {
     taskId: nullableString(row.task_id), projectId: nullableString(row.project_id), goalId: nullableString(row.goal_id),
     title: requireString(row.title, 'actions.title'), description: nullableString(row.description), status: row.status as ActionStatus,
     importance: Number(row.importance),
-    estimatedMinutes: nullableNumber(row.estimated_minutes), dueAt: nullableString(row.due_at),
+    estimatedMinutes: nullableNumber(row.estimated_minutes),
+    dueDate: nullableString(row.due_date), dueTime: nullableString(row.due_time), dueAt: nullableString(row.due_at),
     accumulatedActiveSeconds: nonNegativeInteger(row.accumulated_active_seconds, 'actions.accumulated_active_seconds'),
     startedAt: nullableString(row.started_at),
     createdAt: requireString(row.created_at, 'actions.created_at'), updatedAt: requireString(row.updated_at, 'actions.updated_at'),
@@ -335,7 +337,8 @@ export class SupabaseRyqenRepository implements RyqenRepository {
     const result = await supabase.rpc('ryqen_capture_action', {
       p_title: input.title,
       p_importance: input.importance,
-      p_due_at: input.dueAt,
+      p_due_date: input.dueDate,
+      p_due_time: input.dueTime,
       p_estimated_minutes: input.estimatedMinutes,
     })
     return mapAction(unwrap(result.data, result.error, 'Capture action') as DatabaseRow)

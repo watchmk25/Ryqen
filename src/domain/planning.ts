@@ -1,4 +1,5 @@
 import type { Action, Context, Goal, JsonValue, PlanningContext, PlanningData, PriorityAction, Project, Task, TodayEmptyState } from './ryqen'
+import { calendarDateForDueValue, dueValueForAction } from './actionTiming'
 
 const DEFAULT_ESTIMATED_MINUTES = 30
 const MAX_PRIORITY_ACTIONS = 3
@@ -60,14 +61,15 @@ export function derivePlanningContext(contexts: Context[], now = new Date()): Pl
 }
 
 function daysUntil(date: string, now: Date): number {
-  const target = new Date(date)
+  const target = calendarDateForDueValue(date)
+  if (!target) return Number.POSITIVE_INFINITY
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const targetDay = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime()
   return Math.round((targetDay - today) / 86400000)
 }
 
 function nearestDueDate(action: Action, task: Task | null, project: Project | null, goal: Goal | null): string | null {
-  return action.dueAt ?? task?.dueAt ?? project?.targetDate ?? goal?.targetDate ?? null
+  return dueValueForAction(action) ?? task?.dueAt ?? project?.targetDate ?? goal?.targetDate ?? null
 }
 
 function contextualImportance(action: Action, task: Task | null, project: Project | null, goal: Goal | null): number {

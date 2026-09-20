@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import { DailySummaryRow, EditModal } from '../components'
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker'
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { DailySummaryRow, EditModal, PickerColumn } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatDueTiming, formatElapsedTime, formatEstimatedEffort, MAX_CAPTURE_ESTIMATED_MINUTES, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
+import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatActionDueTiming, formatElapsedTime, formatEstimatedEffort, initialCustomDueDate, localDateForCapture, MAX_CAPTURE_ESTIMATED_MINUTES, shouldConfirmOldDueDate, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
+import { getOldDateWarningEnabled, setOldDateWarningEnabled } from '../utils/oldDateWarningPreference'
 
 type HomeTabProps = {
   userId: string
@@ -30,6 +32,11 @@ type PriorityCardProps = {
 type WorkCaptureCardProps = {
   title: string
   dueTiming: CaptureDueTiming
+  customDueDate: string
+  showDatePicker: boolean
+  customTimeEnabled: boolean
+  customDueHour: number
+  customDueMinute: number
   importance: CaptureImportance
   effort: CaptureEffort
   customEstimatedMinutes: string
@@ -37,6 +44,11 @@ type WorkCaptureCardProps = {
   unavailable: boolean
   onChangeTitle: (title: string) => void
   onChangeDueTiming: (dueTiming: CaptureDueTiming) => void
+  onOpenDatePicker: () => void
+  onDatePickerChange: (event: DateTimePickerEvent, date?: Date) => void
+  onChangeCustomTimeEnabled: (enabled: boolean) => void
+  onChangeCustomDueHour: (hour: number) => void
+  onChangeCustomDueMinute: (minute: number) => void
   onChangeImportance: (importance: CaptureImportance) => void
   onChangeEffort: (effort: CaptureEffort) => void
   onChangeCustomEstimatedMinutes: (minutes: string) => void
@@ -71,8 +83,8 @@ function emptyStateTitle(emptyState: TodayEmptyState): string {
 const dueTimingOptions: Array<{ label: string; value: CaptureDueTiming }> = [
   { label: 'Today', value: 'today' },
   { label: 'Tomorrow', value: 'tomorrow' },
-  { label: 'Later', value: 'later' },
-  { label: 'No deadline', value: 'none' },
+  { label: 'Custom', value: 'custom' },
+  { label: 'No due date', value: 'none' },
 ]
 
 const importanceOptions: Array<{ label: string; value: CaptureImportance }> = [
@@ -122,13 +134,26 @@ function ElapsedTime({ action }: { action: PriorityAction['action'] }) {
 }
 
 function WorkCaptureCard({
-  title, dueTiming, importance, effort, customEstimatedMinutes, submitting, unavailable,
-  onChangeTitle, onChangeDueTiming, onChangeImportance, onChangeEffort, onChangeCustomEstimatedMinutes, onSubmit, onCancel,
+  title, dueTiming, customDueDate, showDatePicker, customTimeEnabled, customDueHour, customDueMinute, importance, effort, customEstimatedMinutes, submitting, unavailable,
+  onChangeTitle, onChangeDueTiming, onOpenDatePicker, onDatePickerChange, onChangeCustomTimeEnabled, onChangeCustomDueHour, onChangeCustomDueMinute, onChangeImportance, onChangeEffort, onChangeCustomEstimatedMinutes, onSubmit, onCancel,
 }: WorkCaptureCardProps) {
   const customMinutes = Number(customEstimatedMinutes)
   const customEffortIsValid = effort !== 'custom'
     || (Number.isInteger(customMinutes) && customMinutes >= 1 && customMinutes <= MAX_CAPTURE_ESTIMATED_MINUTES)
-  const canSubmit = title.trim().length > 0 && customEffortIsValid && !submitting && !unavailable
+  const customDateIsValid = /^\d{4}-\d{2}-\d{2}$/.test(customDueDate)
+  const canSubmit = title.trim().length > 0 && customEffortIsValid && (dueTiming !== 'custom' || customDateIsValid) && !submitting && !unavailable
+  const dueSummary = dueTiming === 'today'
+    ? 'Due today'
+    : dueTiming === 'tomorrow'
+      ? 'Due tomorrow'
+      : dueTiming === 'custom'
+        ? customDueDate
+          ? `Due ${customDueDate}${customTimeEnabled ? ` at ${String(customDueHour).padStart(2, '0')}:${String(customDueMinute).padStart(2, '0')}` : ''}`
+          : 'Choose a due date'
+        : 'No due date'
+  const pickerDate = /^\d{4}-\d{2}-\d{2}$/.test(customDueDate)
+    ? new Date(Number(customDueDate.slice(0, 4)), Number(customDueDate.slice(5, 7)) - 1, Number(customDueDate.slice(8, 10)))
+    : new Date()
 
   return (
     <View style={{ marginHorizontal: 20, marginBottom: 12, backgroundColor: C.surface, borderRadius: 16, padding: 14, gap: 12 }}>
@@ -160,6 +185,43 @@ function WorkCaptureCard({
             )
           })}
         </View>
+        {dueTiming === 'custom' && (
+          <View style={{ gap: 9, backgroundColor: C.surface2, borderRadius: 10, padding: 10 }}>
+            <TouchableOpacity
+              disabled={unavailable}
+              onPress={onOpenDatePicker}
+              style={{ minHeight: 42, backgroundColor: C.surface, borderRadius: 8, paddingHorizontal: 10, justifyContent: 'center' }}
+            >
+              <Text style={{ color: C.t1, fontSize: 14, fontWeight: '700' }}>{customDueDate || 'Choose a due date'}</Text>
+            </TouchableOpacity>
+            {showDatePicker && (
+              <DateTimePicker
+                value={pickerDate}
+                mode="date"
+                display="default"
+                onChange={onDatePickerChange}
+              />
+            )}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={[T.footnote, { fontWeight: '600' }]}>Exact time (optional)</Text>
+              <TouchableOpacity
+                disabled={unavailable}
+                onPress={() => onChangeCustomTimeEnabled(!customTimeEnabled)}
+                style={{ backgroundColor: customTimeEnabled ? C.accentDim : C.surface, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
+              >
+                <Text style={{ color: customTimeEnabled ? C.accent : C.t2, fontSize: 11, fontWeight: '800' }}>{customTimeEnabled ? 'Time set' : 'Add time'}</Text>
+              </TouchableOpacity>
+            </View>
+            {customTimeEnabled && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                <PickerColumn value={customDueHour} max={24} onChange={onChangeCustomDueHour} disabled={unavailable} />
+                <Text style={{ fontSize: 18, color: C.t2, marginHorizontal: 4 }}>:</Text>
+                <PickerColumn value={customDueMinute} max={60} onChange={onChangeCustomDueMinute} disabled={unavailable} />
+              </View>
+            )}
+          </View>
+        )}
+        <Text style={[T.caption1, { color: C.t2 }]}>{dueSummary}</Text>
       </View>
       <View style={{ gap: 6 }}>
         <Text style={[T.caption1, { fontWeight: '700' }]}>IMPORTANCE</Text>
@@ -286,7 +348,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
   const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
   const disabled = pending || unavailable || !planItem
-  const dueTiming = formatDueTiming(priority.action.dueAt)
+  const dueTiming = formatActionDueTiming(priority.action)
 
   return (
     <View style={{
@@ -358,7 +420,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
           onPress={() => onDefer(priority.action.id)}
           style={{ minWidth: 58, height: 44, backgroundColor: C.surface2, borderRadius: 11, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
         >
-          <Text style={{ color: C.t1, fontSize: 12, fontWeight: '700' }}>Defer</Text>
+          <Text style={{ color: C.t1, fontSize: 12, fontWeight: '700' }}>{pending && pendingOperation === 'defer' ? 'Deferring...' : 'Defer'}</Text>
         </TouchableOpacity>
         {!isInProgress && (
           <TouchableOpacity
@@ -366,7 +428,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
             onPress={() => onSkip(priority.action.id)}
             style={{ minWidth: 54, height: 44, backgroundColor: C.surface2, borderRadius: 11, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
           >
-            <Text style={{ color: C.t2, fontSize: 12, fontWeight: '700' }}>Skip</Text>
+            <Text style={{ color: C.t2, fontSize: 12, fontWeight: '700' }}>{pending && pendingOperation === 'skip' ? 'Skipping...' : 'Skip'}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -379,6 +441,12 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const [showCapture, setShowCapture] = useState(false)
   const [captureTitle, setCaptureTitle] = useState('')
   const [captureDueTiming, setCaptureDueTiming] = useState<CaptureDueTiming>('none')
+  const [customDueDate, setCustomDueDate] = useState('')
+  const [showCustomDatePicker, setShowCustomDatePicker] = useState(false)
+  const [oldDateWarningEnabled, setOldDateWarningEnabledState] = useState(true)
+  const [customTimeEnabled, setCustomTimeEnabled] = useState(false)
+  const [customDueHour, setCustomDueHour] = useState(9)
+  const [customDueMinute, setCustomDueMinute] = useState(0)
   const [captureImportance, setCaptureImportance] = useState<CaptureImportance>('normal')
   const [captureEffort, setCaptureEffort] = useState<CaptureEffort>(DEFAULT_CAPTURE_EFFORT)
   const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState('')
@@ -413,11 +481,23 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const completedCount = state?.planItems.filter((item) => item.status === 'completed').length ?? 0
   const rankColor = RANK_COLORS[rank] ?? C.accent
 
+  useEffect(() => {
+    let current = true
+    void getOldDateWarningEnabled(userId).then((enabled) => {
+      if (current) setOldDateWarningEnabledState(enabled)
+    })
+    return () => { current = false }
+  }, [userId])
+
   async function submitCapture() {
     if (isTodayUnavailable) return
     const created = await captureAction({
       title: captureTitle,
       dueTiming: captureDueTiming,
+      customDueDate: captureDueTiming === 'custom' ? customDueDate : undefined,
+      customDueTime: captureDueTiming === 'custom' && customTimeEnabled
+        ? `${String(customDueHour).padStart(2, '0')}:${String(customDueMinute).padStart(2, '0')}`
+        : null,
       importance: captureImportance,
       effort: captureEffort,
       customEstimatedMinutes: captureEffort === 'custom' ? Number(customEstimatedMinutes) : undefined,
@@ -426,16 +506,70 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
 
     setCaptureTitle('')
     setCaptureDueTiming('none')
+    setCustomDueDate('')
+    setShowCustomDatePicker(false)
+    setCustomTimeEnabled(false)
+    setCustomDueHour(9)
+    setCustomDueMinute(0)
     setCaptureImportance('normal')
     setCaptureEffort(DEFAULT_CAPTURE_EFFORT)
     setCustomEstimatedMinutes('')
     setShowCapture(false)
   }
 
+  async function disableOldDateWarningAndCapture() {
+    setOldDateWarningEnabledState(false)
+    try {
+      await setOldDateWarningEnabled(userId, false)
+    } finally {
+      void submitCapture()
+    }
+  }
+
+  function requestCapture() {
+    if (captureDueTiming !== 'custom' || !oldDateWarningEnabled || !shouldConfirmOldDueDate(customDueDate)) {
+      void submitCapture()
+      return
+    }
+
+    const [year, month, day] = customDueDate.split('-').map(Number)
+    const formattedDate = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      .format(new Date(year, month - 1, day))
+    Alert.alert(
+      'Add overdue action?',
+      `This action will be added as overdue.\nDue ${formattedDate}.`,
+      [
+        { text: 'Change date', style: 'cancel', onPress: () => setShowCustomDatePicker(true) },
+        { text: "Don't ask again for old dates", onPress: () => void disableOldDateWarningAndCapture() },
+        { text: 'Add anyway', onPress: () => void submitCapture() },
+      ],
+    )
+  }
+
+  function selectCaptureDueTiming(dueTiming: CaptureDueTiming) {
+    setCaptureDueTiming(dueTiming)
+    if (dueTiming === 'custom') {
+      setCustomDueDate((current) => current || initialCustomDueDate())
+      setShowCustomDatePicker(true)
+      return
+    }
+    setShowCustomDatePicker(false)
+  }
+
+  function handleCustomDatePickerChange(event: DateTimePickerEvent, selectedDate?: Date) {
+    setShowCustomDatePicker(false)
+    if (event.type === 'set' && selectedDate) setCustomDueDate(localDateForCapture(selectedDate))
+  }
+
   function closeCapture() {
     if (capturing) return
     setCaptureTitle('')
     setCaptureDueTiming('none')
+    setCustomDueDate('')
+    setShowCustomDatePicker(false)
+    setCustomTimeEnabled(false)
+    setCustomDueHour(9)
+    setCustomDueMinute(0)
     setCaptureImportance('normal')
     setCaptureEffort(DEFAULT_CAPTURE_EFFORT)
     setCustomEstimatedMinutes('')
@@ -501,17 +635,27 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         <WorkCaptureCard
           title={captureTitle}
           dueTiming={captureDueTiming}
+          customDueDate={customDueDate}
+          showDatePicker={showCustomDatePicker}
+          customTimeEnabled={customTimeEnabled}
+          customDueHour={customDueHour}
+          customDueMinute={customDueMinute}
           importance={captureImportance}
           effort={captureEffort}
           customEstimatedMinutes={customEstimatedMinutes}
           submitting={capturing}
           unavailable={isTodayUnavailable}
           onChangeTitle={setCaptureTitle}
-          onChangeDueTiming={setCaptureDueTiming}
+          onChangeDueTiming={selectCaptureDueTiming}
+          onOpenDatePicker={() => setShowCustomDatePicker(true)}
+          onDatePickerChange={handleCustomDatePickerChange}
+          onChangeCustomTimeEnabled={setCustomTimeEnabled}
+          onChangeCustomDueHour={setCustomDueHour}
+          onChangeCustomDueMinute={setCustomDueMinute}
           onChangeImportance={setCaptureImportance}
           onChangeEffort={setCaptureEffort}
           onChangeCustomEstimatedMinutes={setCustomEstimatedMinutes}
-          onSubmit={() => void submitCapture()}
+          onSubmit={requestCapture}
           onCancel={closeCapture}
         />
       )}
@@ -661,7 +805,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
                   onPress={() => void reconsiderDeferredAction(action.id)}
                   style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
                 >
-                  <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending ? 'Updating...' : 'Reconsider'}</Text>
+                  <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending ? 'Reconsidering...' : 'Reconsider'}</Text>
                 </TouchableOpacity>
               </View>
             )

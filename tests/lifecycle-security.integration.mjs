@@ -131,6 +131,17 @@ VALUES
   ('${actionPause}', '${userA}', 'Pause and resume', 'pending', 3, 15),
   ('${actionNoTarget}', '${userA}', 'No timing target', 'pending', 3, 15);
 
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO public.actions (user_id, title, status, importance, estimated_minutes, due_time)
+    VALUES ('${userA}', 'Invalid database time-only deadline', 'pending', 3, 15, '09:00'::time);
+    RAISE EXCEPTION 'database accepted a due time without a due date';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END;
+$$;
+
 UPDATE public.actions SET task_id = '${blockedTask}' WHERE id = '${blockedTaskAction}';
 UPDATE public.actions SET project_id = '${pausedProject}' WHERE id = '${pausedProjectAction}';
 UPDATE public.actions SET goal_id = '${pausedGoal}' WHERE id = '${pausedGoalAction}';
@@ -154,7 +165,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '${userA}', true);
 DO $$
 BEGIN
-  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 3 THEN
+  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 4 THEN
     RAISE EXCEPTION 'Today backend contract returned an unexpected version';
   END IF;
 END;
@@ -242,6 +253,7 @@ END;
 $$;
 
 UPDATE public.actions SET title = 'Ordinary edit remains allowed' WHERE id = '${actionA}';
+UPDATE public.actions SET due_date = current_date + 1, due_time = '10:00'::time WHERE id = '${actionA}';
 DO $$
 BEGIN
   BEGIN
@@ -269,6 +281,28 @@ BEGIN
     RAISE EXCEPTION 'invalid capture effort unexpectedly succeeded';
   EXCEPTION WHEN raise_exception THEN NULL;
   END;
+  BEGIN
+    PERFORM public.ryqen_capture_action('Time without date', 3::smallint, NULL::date, '09:00'::time, 30);
+    RAISE EXCEPTION 'time without date unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+END;
+$$;
+SELECT public.ryqen_capture_action('Date-only capture', 3::smallint, current_date + 2, NULL::time, 30);
+SELECT public.ryqen_capture_action('Timed capture', 3::smallint, current_date + 3, '14:30'::time, 30);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.actions
+    WHERE user_id = '${userA}' AND title = 'Date-only capture'
+      AND due_date = current_date + 2 AND due_time IS NULL AND due_at IS NULL
+  ) OR NOT EXISTS (
+    SELECT 1 FROM public.actions
+    WHERE user_id = '${userA}' AND title = 'Timed capture'
+      AND due_date = current_date + 3 AND due_time = '14:30'::time AND due_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'date-first capture did not persist authoritative temporal fields';
+  END IF;
 END;
 $$;
 SELECT public.ryqen_start_today_action('${planA}', '${actionA}');
@@ -541,6 +575,7 @@ BEGIN
     'public.ryqen_reconsider_today_action(uuid,uuid)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,timestamp with time zone)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,timestamp with time zone,integer)'::regprocedure,
+    'public.ryqen_capture_action(text,smallint,date,time without time zone,integer)'::regprocedure,
     'public.ryqen_reconcile_today_plan(uuid,date,jsonb)'::regprocedure,
     'public.ryqen_today_backend_contract()'::regprocedure
   ]

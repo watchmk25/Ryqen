@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { canTransitionAction } from '../src/domain/actionTransitions.ts'
 import { activeElapsedSeconds, formatElapsedTime } from '../src/domain/actionElapsed.ts'
-import { formatDueTiming, formatEstimatedEffort } from '../src/domain/actionTiming.ts'
+import { dueValueForAction, formatActionDueTiming, formatDueTiming, formatEstimatedEffort } from '../src/domain/actionTiming.ts'
 import { derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities, TODAY_PRIORITY_LIMIT } from '../src/domain/planning.ts'
 import { availableTimeMinutesForTodayPreset, prepareTodayCheckIn } from '../src/domain/todayCheckIn.ts'
-import { dueAtForCapture, estimatedMinutesForCapture, importanceForCapture, prepareWorkCapture } from '../src/domain/workCapture.ts'
+import { dueDateForCapture, estimatedMinutesForCapture, importanceForCapture, initialCustomDueDate, prepareWorkCapture, shouldConfirmOldDueDate } from '../src/domain/workCapture.ts'
+import { loadOldDateWarningEnabled, oldDateWarningPreferenceKey, saveOldDateWarningEnabled } from '../src/domain/oldDateWarningPreference.ts'
 
 const now = new Date('2026-09-12T09:00:00Z')
 const userId = 'user-1'
@@ -22,6 +23,8 @@ function action(id, overrides = {}) {
     status: 'pending',
     importance: 3,
     estimatedMinutes: 20,
+    dueDate: null,
+    dueTime: null,
     dueAt: null,
     accumulatedActiveSeconds: 0,
     startedAt: null,
@@ -240,36 +243,124 @@ test('formats estimated effort and concise due timing for Today cards', () => {
   assert.equal(formatEstimatedEffort(90), 'Est. 1 hr 30 min')
   assert.equal(formatEstimatedEffort(480), 'Est. 8 hr')
   assert.equal(formatDueTiming(null, displayNow), null)
-  assert.equal(formatDueTiming(new Date(2026, 8, 12, 8).toISOString(), displayNow), 'Overdue today')
-  assert.equal(formatDueTiming(new Date(2026, 8, 12, 18).toISOString(), displayNow), 'Due today')
-  assert.equal(formatDueTiming(new Date(2026, 8, 13, 9).toISOString(), displayNow), 'Due tomorrow')
-  assert.equal(formatDueTiming(new Date(2026, 8, 11, 9).toISOString(), displayNow), 'Overdue by 1 day')
-  assert.equal(formatDueTiming(new Date(2026, 8, 10, 9).toISOString(), displayNow), 'Overdue by 2 days')
+  assert.equal(formatDueTiming(new Date(2026, 8, 12, 8).toISOString(), displayNow), 'Overdue by 1h 0m · Due 8:00 AM')
+  assert.equal(formatDueTiming(new Date(2026, 8, 12, 18).toISOString(), displayNow), 'Due today · 6:00 PM')
+  assert.equal(formatDueTiming(new Date(2026, 8, 13, 9).toISOString(), displayNow), 'Due tomorrow · 9:00 AM')
+  assert.equal(formatDueTiming(new Date(2026, 8, 11, 9).toISOString(), displayNow), 'Overdue by 1 day · Due Sep 11')
+  assert.equal(formatDueTiming(new Date(2026, 8, 10, 9).toISOString(), displayNow), 'Overdue by 2 days · Due Sep 10')
   assert.equal(formatDueTiming('not-a-date', displayNow), null)
 })
 
-test('maps capture importance and due timing deterministically', () => {
-  const captureNow = new Date('2026-09-12T09:00:00Z')
-  const today = dueAtForCapture('today', captureNow)
-  const tomorrow = dueAtForCapture('tomorrow', captureNow)
+test('uses date-first Action deadlines while preserving legacy due_at fallback', () => {
+  const displayNow = new Date(2026, 8, 12, 9, 0, 0)
+  const dateOnly = action('date-only', { dueDate: '2026-09-12', dueTime: null, dueAt: '2026-09-20T12:00:00Z' })
+  const exactTime = action('exact-time', { dueDate: '2026-09-13', dueTime: '14:30:00', dueAt: null })
+  const legacy = action('legacy', { dueAt: new Date(2026, 8, 13, 9).toISOString() })
+
+  assert.equal(dueValueForAction(dateOnly), '2026-09-12')
+  assert.equal(dueValueForAction(legacy), legacy.dueAt)
+  assert.equal(formatActionDueTiming(dateOnly, displayNow), 'Due today')
+  assert.equal(formatActionDueTiming(exactTime, displayNow), 'Due tomorrow · 2:30 PM')
+  assert.equal(formatActionDueTiming(legacy, displayNow), 'Due tomorrow · 9:00 AM')
+  assert.equal(formatActionDueTiming(action('overdue-clock', { dueDate: '2026-09-12', dueTime: '08:30' }), displayNow), 'Overdue by 30m · Due 8:30 AM')
+})
+
+test('formats precise and calendar-aware overdue deadlines without inventing a date-only time', () => {
+  const noon = new Date(2026, 8, 20, 12, 44, 30)
+
+  assert.equal(formatActionDueTiming(action('just-now', { dueDate: '2026-09-20', dueTime: '12:44' }), noon), 'Overdue just now · Due 12:44 PM')
+  assert.equal(formatActionDueTiming(action('minutes', { dueDate: '2026-09-20', dueTime: '12:32' }), noon), 'Overdue by 12m · Due 12:32 PM')
+  assert.equal(formatActionDueTiming(action('hours', { dueDate: '2026-09-20', dueTime: '10:29' }), noon), 'Overdue by 2h 15m · Due 10:29 AM')
+  assert.equal(formatActionDueTiming(action('one-day', { dueDate: '2026-09-19', dueTime: null }), noon), 'Overdue by 1 day · Due Sep 19')
+  assert.equal(formatActionDueTiming(action('days', { dueDate: '2026-09-17', dueTime: null }), noon), 'Overdue by 3 days · Due Sep 17')
+  assert.equal(formatActionDueTiming(action('six-days', { dueDate: '2026-09-14', dueTime: null }), noon), 'Overdue by 6 days · Due Sep 14')
+  assert.equal(formatActionDueTiming(action('week', { dueDate: '2026-09-13', dueTime: null }), noon), 'Overdue by 1 week · Due Sep 13')
+  assert.equal(formatActionDueTiming(action('weeks', { dueDate: '2026-09-06', dueTime: null }), noon), 'Overdue by 2 weeks · Due Sep 6')
+  assert.equal(formatActionDueTiming(action('month', { dueDate: '2026-08-20', dueTime: null }), noon), 'Overdue by 1 month · Due Aug 20')
+  assert.equal(formatActionDueTiming(action('month-days', { dueDate: '2026-08-16', dueTime: null }), noon), 'Overdue by 1 month 4 days · Due Aug 16')
+  assert.equal(formatActionDueTiming(action('year', { dueDate: '2025-09-20', dueTime: null }), noon), 'Overdue by 1 year · Due Sep 20, 2025')
+  assert.equal(formatActionDueTiming(action('old', { dueDate: '2006-01-01', dueTime: null }), noon), 'Overdue by 20 years 8 months · Due Jan 1, 2006')
+})
+
+test('an exact due time does not change date-level priority scoring', () => {
+  const data = {
+    contexts: [], goals: [], projects: [], tasks: [],
+    actions: [
+      action('date-only', { dueDate: '2026-09-13', dueTime: null }),
+      action('exact-time', { dueDate: '2026-09-13', dueTime: '23:45' }),
+    ],
+  }
+  const selected = selectTodayPriorities(data, derivePlanningContext([], now), [], now)
+  assert.equal(selected.find((item) => item.action.id === 'date-only')?.priorityScore, selected.find((item) => item.action.id === 'exact-time')?.priorityScore)
+})
+
+test('maps capture importance and local calendar dates deterministically', () => {
+  const captureNow = new Date(2026, 8, 12, 9, 0, 0)
+  const today = dueDateForCapture('today', undefined, captureNow)
+  const tomorrow = dueDateForCapture('tomorrow', undefined, captureNow)
 
   assert.equal(importanceForCapture('low'), 1)
   assert.equal(importanceForCapture('normal'), 3)
   assert.equal(importanceForCapture('high'), 5)
-  assert.equal(dueAtForCapture('later', captureNow), null)
-  assert.equal(dueAtForCapture('none', captureNow), null)
-  assert.equal(new Date(today).getDate(), captureNow.getDate())
-  assert.equal(new Date(tomorrow).getDate(), captureNow.getDate() + 1)
+  assert.equal(today, '2026-09-12')
+  assert.equal(tomorrow, '2026-09-13')
+  assert.equal(dueDateForCapture('none', undefined, captureNow), null)
+  assert.throws(() => dueDateForCapture('custom', undefined, captureNow), /valid due date/)
+  assert.throws(() => dueDateForCapture('later', undefined, captureNow), /supported due option/)
 })
 
-test('validates and trims captured work titles', () => {
+test('initializes Custom date selection locally and confirms only unusually old dates', () => {
+  const captureNow = new Date(2026, 8, 12, 9, 0, 0)
+  assert.equal(initialCustomDueDate(captureNow), '2026-09-12')
+  assert.equal(dueDateForCapture('custom', '2026-09-11', captureNow), '2026-09-11')
+  assert.equal(dueDateForCapture('custom', '2023-01-12', captureNow), '2023-01-12')
+  assert.equal(shouldConfirmOldDueDate('2026-09-11', captureNow), false)
+  assert.equal(shouldConfirmOldDueDate('2025-09-12', captureNow), true)
+  assert.equal(shouldConfirmOldDueDate('2023-01-12', captureNow), true)
+})
+
+test('keeps the old-date warning enabled by default and persists explicit opt-out without changing capture data', async () => {
+  const values = new Map()
+  const storage = {
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => { values.set(key, value) },
+  }
+  const userKey = oldDateWarningPreferenceKey('user-1')
+  const oldCapture = { title: 'Historical item', dueTiming: 'custom', customDueDate: '2006-01-01', customDueTime: '09:30', importance: 'normal', effort: '30' }
+
+  assert.equal(await loadOldDateWarningEnabled(storage, 'user-1'), true)
+  assert.equal(shouldConfirmOldDueDate(oldCapture.customDueDate, new Date(2026, 8, 20)), true)
+  assert.deepEqual(prepareWorkCapture(oldCapture), {
+    title: 'Historical item', dueDate: '2006-01-01', dueTime: '09:30', importance: 3, estimatedMinutes: 30,
+  })
+
+  await saveOldDateWarningEnabled(storage, 'user-1', false)
+  assert.equal(values.get(userKey), 'false')
+  assert.equal(await loadOldDateWarningEnabled(storage, 'user-1'), false)
+})
+
+test('prepares date-only, exact-time, and no-date capture semantics', () => {
   assert.deepEqual(prepareWorkCapture({ title: '  Send the draft  ', dueTiming: 'none', importance: 'high', effort: '30' }, now), {
     title: 'Send the draft',
-    dueAt: null,
+    dueDate: null,
+    dueTime: null,
     importance: 5,
     estimatedMinutes: 30,
   })
+  assert.deepEqual(prepareWorkCapture({ title: 'Today', dueTiming: 'today', importance: 'normal', effort: '30' }, new Date(2026, 8, 12, 9)), {
+    title: 'Today', dueDate: '2026-09-12', dueTime: null, importance: 3, estimatedMinutes: 30,
+  })
+  assert.deepEqual(prepareWorkCapture({ title: 'Custom date', dueTiming: 'custom', customDueDate: '2026-10-03', importance: 'normal', effort: '30' }), {
+    title: 'Custom date', dueDate: '2026-10-03', dueTime: null, importance: 3, estimatedMinutes: 30,
+  })
+  assert.deepEqual(prepareWorkCapture({ title: 'Custom time', dueTiming: 'custom', customDueDate: '2026-10-03', customDueTime: '14:05', importance: 'normal', effort: '30' }), {
+    title: 'Custom time', dueDate: '2026-10-03', dueTime: '14:05', importance: 3, estimatedMinutes: 30,
+  })
   assert.throws(() => prepareWorkCapture({ title: '   ', dueTiming: 'today', importance: 'normal', effort: '30' }, now), /title is required/)
+  assert.throws(() => prepareWorkCapture({ title: 'Custom', dueTiming: 'custom', importance: 'normal', effort: '30' }, now), /valid due date/)
+  assert.throws(() => prepareWorkCapture({ title: 'No date', dueTiming: 'none', customDueTime: '09:00', importance: 'normal', effort: '30' }, now), /due time requires a due date/)
+  assert.throws(() => prepareWorkCapture({ title: 'Bad date', dueTiming: 'custom', customDueDate: '2026-02-30', importance: 'normal', effort: '30' }, now), /valid due date/)
+  assert.throws(() => prepareWorkCapture({ title: 'Bad time', dueTiming: 'custom', customDueDate: '2026-10-03', customDueTime: '24:00', importance: 'normal', effort: '30' }, now), /valid due time/)
 })
 
 test('maps capture effort selections and validates custom duration', () => {

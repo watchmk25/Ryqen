@@ -115,6 +115,14 @@ A meaningful piece of work that may contain one or more Actions.
 ### Action
 A concrete next step. Actions may exist independently.
 
+New V0.1 capture represents deadlines as an optional local `due_date` plus an
+optional `due_time`; a time is never valid without its date. Legacy `due_at`
+remains read-compatible during transition, but new semantic data is not written
+there. Exact time improves display precision only: deterministic V0.1 planning
+continues to score deadlines by calendar date. Action-specific reminder intent
+is deliberately deferred; it must extend the existing notification architecture
+when separately approved rather than creating a parallel notification system.
+
 ### Daily Plan
 The adaptive, date-scoped snapshot of recommended work/actions for the current circumstances. Persistent Actions remain the source of lifecycle truth; cross-day Active Work, Paused Work, and Deferred Work may use historical Plan Items only as validated lifecycle/audit anchors.
 
@@ -200,7 +208,21 @@ Important state transitions are validated independently of UI and future AI inpu
 
 Meaningful Today lifecycle mutations use protected Supabase RPC boundaries. Those functions authenticate through `auth.uid()`, explicitly verify record ownership, validate the expected state transition, perform related writes atomically, and record lifecycle Activities atomically where the transition requires them.
 
-Pause is a persisted lifecycle state, distinct from Defer: `in_progress -> paused -> in_progress`. A Pause preserves its historical Plan Item anchor, removes the Action from Active Work and fresh recommendations, and requires explicit Resume. `actions.started_at` marks only the current open active session; `actions.accumulated_active_seconds` stores previously closed active sessions. Pause and active Defer flush the open session server-side and clear `started_at`; Resume opens a new session while preserving accumulated time; Complete flushes and persists the final total. Pause/Resume patch Today from the authoritative RPC response and do not run a planner reconciliation solely for that state change. Defer instead moves work out of the immediate context and requires explicit Reconsider before it can become pending again.
+Pause is a persisted lifecycle state, distinct from Defer: `in_progress -> paused -> in_progress`. A Pause preserves its historical Plan Item anchor, removes the Action from Active Work and fresh recommendations, and requires explicit Resume. `actions.started_at` marks only the current open active session; `actions.accumulated_active_seconds` stores previously closed active sessions. Pause and active Defer flush the open session server-side and clear `started_at`; Resume opens a new session while preserving accumulated time; Complete flushes and persists the final total. Defer instead moves work out of the immediate context and requires explicit Reconsider before it can become pending again.
+
+Today lifecycle interactions that can affect the fresh recommendation space use
+an authoritative latency boundary:
+
+```text
+protected lifecycle RPC -> immediate local patch from the RPC result -> non-blocking Today revalidation
+```
+
+Start, Complete, Defer, Reconsider, and Skip therefore do not synchronously
+plan before or after a successful mutation. Revalidation recomputes fresh
+recommendations without changing the already-authoritative lifecycle outcome.
+Historical lifecycle Plan Items may be mutation anchors for cross-day Active
+or Deferred Work, but are never inserted into the current day's `planItems`
+snapshot by a local patch.
 
 Authenticated clients cannot directly write Activities or mutate Plan Items. Direct Action updates are limited to ordinary planning fields; lifecycle fields such as Action status and `started_at` remain RPC-controlled. The protected functions are `SECURITY DEFINER`, run with an empty `search_path`, and retain explicit `auth.uid()` and ownership checks rather than relying on definer privileges or RLS as the authorization decision.
 

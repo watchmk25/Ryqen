@@ -8,6 +8,7 @@ import { C, T, d, RANK_COLORS, STAT_COLORS, SKILLS, STAT_GROUPS } from '../const
 import { calcStats } from '../utils'
 import { EditModal, PickerColumn, RecentActivityModal } from '../components'
 import { requestNotificationPermission, scheduleDailyReminder, cancelDailyReminder } from '../utils/notifications'
+import { getOldDateWarningEnabled, setOldDateWarningEnabled } from '../utils/oldDateWarningPreference'
 import type { Character, AbilityLevel } from '../types'
 
 type ProfileTabProps = { character: Character; setCharacter: React.Dispatch<React.SetStateAction<Character>> }
@@ -43,6 +44,8 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
   const [reminderHour, setReminderHour] = useState(20)
   const [reminderMinute, setReminderMinute] = useState(0)
+  const [editTodayPreferences, setEditTodayPreferences] = useState(false)
+  const [oldDateWarningEnabled, setOldDateWarningEnabledState] = useState(true)
 
   useEffect(() => {
     if (!user) return
@@ -65,6 +68,15 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
       })
     supabase.from('hunter_abilities').select('*').eq('user_id', user!.id).single()
       .then(({ data }) => { if (!data) return; setAbilities(data); setAbilityValues(data) })
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+    let current = true
+    void getOldDateWarningEnabled(user.id).then((enabled) => {
+      if (current) setOldDateWarningEnabledState(enabled)
+    })
+    return () => { current = false }
   }, [user])
 
   function toggleWeakness(w: string) { setWeaknesses(prev => prev.includes(w) ? prev.filter(x => x !== w) : [...prev, w]) }
@@ -122,6 +134,22 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
     setProfile((p: any) => ({ ...p, notifications_enabled: notificationsEnabled, reminder_hour: reminderHour, reminder_minute: reminderMinute }))
     setSaving(false)
     setEditNotifications(false)
+  }
+
+  async function saveTodayPreferences() {
+    if (!user) return
+    setSaving(true)
+    try {
+      await setOldDateWarningEnabled(user.id, oldDateWarningEnabled)
+      setEditTodayPreferences(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function openTodayPreferences() {
+    if (user) setOldDateWarningEnabledState(await getOldDateWarningEnabled(user.id))
+    setEditTodayPreferences(true)
   }
 
   function formatReminderTime(hour: number, minute: number) {
@@ -294,6 +322,11 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
         )}
       </Card>
 
+      <SectionHeader title="Today preferences" onEdit={() => void openTodayPreferences()} />
+      <Card>
+        <InfoRow label="Confirm very old due dates" value={oldDateWarningEnabled ? 'On' : 'Off'} />
+      </Card>
+
       <View style={{ marginHorizontal: 20, marginTop: 24 }}>
         <TouchableOpacity
           accessibilityRole="button"
@@ -423,6 +456,21 @@ export function ProfileTab({ character, setCharacter }: ProfileTabProps) {
     </>
   )}
 </EditModal>
+
+      <EditModal visible={editTodayPreferences} title="Today preferences" onClose={() => setEditTodayPreferences(false)} onSave={saveTodayPreferences} saving={saving}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <View style={{ flex: 1, gap: 3 }}>
+            <Text style={T.subhead}>Confirm very old due dates</Text>
+            <Text style={T.footnote}>Ask before adding work due a year or more ago.</Text>
+          </View>
+          <Switch
+            value={oldDateWarningEnabled}
+            onValueChange={setOldDateWarningEnabledState}
+            trackColor={{ false: C.surface2, true: C.accent }}
+            thumbColor="#fff"
+          />
+        </View>
+      </EditModal>
 
       <Modal visible={viewPhoto} transparent animationType="fade" onRequestClose={() => setViewPhoto(false)}>
         <View style={{ flex: 1, backgroundColor: '#000000EE' }}>

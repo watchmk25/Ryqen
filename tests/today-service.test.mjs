@@ -8,7 +8,7 @@ const userId = 'user-1'
 function createAction(id, overrides = {}) {
   return {
     id, userId, taskId: null, projectId: null, goalId: null, title: id, description: null,
-    status: 'pending', importance: 3, estimatedMinutes: 15, dueAt: null, accumulatedActiveSeconds: 0, startedAt: null,
+    status: 'pending', importance: 3, estimatedMinutes: 15, dueDate: null, dueTime: null, dueAt: null, accumulatedActiveSeconds: 0, startedAt: null,
     createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', ...overrides,
   }
 }
@@ -21,13 +21,16 @@ class MemoryRyqenRepository {
     this.activities = []
     this.captureInputs = []
     this.sequence = 0
-    this.todayBackendContractVersion = 3
+    this.todayBackendContractVersion = 4
     this.todayBackendContractError = null
     this.todayBackendContractChecks = 0
     this.planningLoads = 0
     this.reconciliations = 0
     this.startRpcCalls = 0
     this.completeRpcCalls = 0
+    this.deferRpcCalls = 0
+    this.reconsiderRpcCalls = 0
+    this.skipRpcCalls = 0
     this.lifecyclePlanItemLookups = 0
     this.currentTime = new Date(now)
   }
@@ -132,7 +135,8 @@ class MemoryRyqenRepository {
     const action = createAction(this.nextId('captured-action'), {
       title: input.title,
       importance: input.importance,
-      dueAt: input.dueAt,
+      dueDate: input.dueDate,
+      dueTime: input.dueTime,
       estimatedMinutes: input.estimatedMinutes,
     })
     this.data.actions.push(action)
@@ -184,6 +188,7 @@ class MemoryRyqenRepository {
     return this.clone({ action, planItem })
   }
   async deferTodayAction(planId, actionId) {
+    this.deferRpcCalls += 1
     const action = this.data.actions.find((item) => item.id === actionId)
     const planItem = this.planItems.find((item) => item.dailyPlanId === planId && item.actionId === actionId)
     const matchingPending = action?.status === 'pending' && planItem?.status === 'pending'
@@ -195,9 +200,11 @@ class MemoryRyqenRepository {
     return this.clone({ action, planItem })
   }
   async skipTodayPlanItem(planId, actionId) {
+    this.skipRpcCalls += 1
     return this.mutateTodayAction(planId, actionId, ['pending'], ['pending'], null, 'skipped', ['plan_item_skipped'])
   }
   async reconsiderTodayAction(planId, actionId) {
+    this.reconsiderRpcCalls += 1
     return this.mutateTodayAction(planId, actionId, ['deferred'], ['deferred'], 'pending', 'pending', [])
   }
 }
@@ -208,6 +215,18 @@ async function startFromDisplayedState(service, actionId, when = now) {
 
 async function completeFromDisplayedState(service, actionId, when = now) {
   return service.completeAction(await service.planToday(userId, when), actionId)
+}
+
+async function deferFromDisplayedState(service, actionId, when = now) {
+  return service.deferAction(await service.planToday(userId, when), actionId)
+}
+
+async function skipFromDisplayedState(service, actionId, when = now) {
+  return service.skipPlanItem(await service.planToday(userId, when), actionId)
+}
+
+async function reconsiderFromDisplayedState(service, actionId, when = now) {
+  return service.reconsiderDeferredAction(await service.planToday(userId, when), actionId)
 }
 
 test('Start and Complete patch their displayed lifecycle state without blocking planning or reconciliation', async () => {
@@ -258,16 +277,59 @@ test('Complete rejects an inconsistent displayed Active Work item without a look
   assert.equal(repository.lifecyclePlanItemLookups, 0)
 })
 
-test('skip updates only the plan item and records plan_item_skipped', async () => {
+test('Skip patches a displayed pending recommendation without synchronous planning', async () => {
   const repository = new MemoryRyqenRepository([createAction('action-1')])
   const service = new TodayService(repository)
 
-  await service.planToday(userId, now)
-  await service.skipPlanItem(userId, 'action-1', now)
+  const displayed = await service.planToday(userId, now)
+  const loadsBeforeSkip = repository.planningLoads
+  const reconciliationsBeforeSkip = repository.reconciliations
+  const skipped = await service.skipPlanItem(displayed, 'action-1')
 
   assert.equal(repository.data.actions[0].status, 'pending')
   assert.equal(repository.planItems[0].status, 'skipped')
+  assert.equal(repository.skipRpcCalls, 1)
+  assert.equal(skipped.priorities.some((priority) => priority.action.id === 'action-1'), false)
+  assert.equal(skipped.planItems.find((item) => item.actionId === 'action-1')?.status, 'skipped')
+  assert.equal(repository.planningLoads, loadsBeforeSkip)
+  assert.equal(repository.reconciliations, reconciliationsBeforeSkip)
   assert.deepEqual(repository.activities.map((activity) => activity.type), ['plan_item_skipped'])
+})
+
+test('Defer patches a displayed pending recommendation without synchronous planning', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1'), createAction('action-2')])
+  const service = new TodayService(repository)
+  const displayed = await service.planToday(userId, now)
+  const loadsBeforeDefer = repository.planningLoads
+  const reconciliationsBeforeDefer = repository.reconciliations
+
+  const deferred = await service.deferAction(displayed, 'action-1')
+
+  assert.equal(repository.deferRpcCalls, 1)
+  assert.equal(repository.planningLoads, loadsBeforeDefer)
+  assert.equal(repository.reconciliations, reconciliationsBeforeDefer)
+  assert.equal(deferred.actions.find((action) => action.id === 'action-1')?.status, 'deferred')
+  assert.equal(deferred.planItems.find((item) => item.actionId === 'action-1')?.status, 'deferred')
+  assert.equal(deferred.priorities.some((priority) => priority.action.id === 'action-1'), false)
+  assert.deepEqual(deferred.deferredWork.map((work) => work.action.id), ['action-1'])
+})
+
+test('Reconsider patches a displayed current-day deferred item without synchronous planning', async () => {
+  const repository = new MemoryRyqenRepository([createAction('action-1')])
+  const service = new TodayService(repository)
+  const deferred = await deferFromDisplayedState(service, 'action-1', now)
+  const loadsBeforeReconsider = repository.planningLoads
+  const reconciliationsBeforeReconsider = repository.reconciliations
+
+  const reconsidered = await service.reconsiderDeferredAction(deferred, 'action-1')
+
+  assert.equal(repository.reconsiderRpcCalls, 1)
+  assert.equal(repository.planningLoads, loadsBeforeReconsider)
+  assert.equal(repository.reconciliations, reconciliationsBeforeReconsider)
+  assert.equal(reconsidered.actions.find((action) => action.id === 'action-1')?.status, 'pending')
+  assert.equal(reconsidered.planItems.find((item) => item.actionId === 'action-1')?.status, 'pending')
+  assert.deepEqual(reconsidered.deferredWork, [])
+  assert.deepEqual(reconsidered.priorities, [])
 })
 
 test('start, complete, defer, and explicit reconsideration preserve valid action transitions', async () => {
@@ -278,10 +340,10 @@ test('start, complete, defer, and explicit reconsideration preserve valid action
   state = await service.startAction(state, 'action-1')
   await service.completeAction(state, 'action-1')
   assert.equal(repository.data.actions.find((action) => action.id === 'action-1').startedAt, null)
-  await service.deferAction(userId, 'action-2', now)
+  await deferFromDisplayedState(service, 'action-2', now)
   assert.equal(repository.data.actions.find((action) => action.id === 'action-2').status, 'deferred')
 
-  await service.reconsiderDeferredAction(userId, 'action-2', now)
+  await reconsiderFromDisplayedState(service, 'action-2', now)
   assert.equal(repository.data.actions.find((action) => action.id === 'action-2').status, 'pending')
   assert.equal(repository.data.actions.find((action) => action.id === 'action-1').accumulatedActiveSeconds, 0)
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
@@ -372,7 +434,7 @@ test('an active Defer flushes timing, while retrying Pause cannot double-count',
 
   state = await service.resumeAction(state, 'timed')
   repository.advanceSeconds(420)
-  await service.deferAction(userId, 'timed', now)
+  await service.deferAction(state, 'timed')
   assert.equal(repository.data.actions[0].status, 'deferred')
   assert.equal(repository.data.actions[0].startedAt, null)
   assert.equal(repository.data.actions[0].accumulatedActiveSeconds, 1020)
@@ -413,9 +475,9 @@ test('records a new start timestamp when a deferred action is started again', as
 
   await startFromDisplayedState(service, 'action-1', now)
   const firstStartedAt = repository.data.actions[0].startedAt
-  await service.deferAction(userId, 'action-1', now)
+  await deferFromDisplayedState(service, 'action-1', now)
   assert.equal(repository.data.actions[0].startedAt, null)
-  await service.reconsiderDeferredAction(userId, 'action-1', now)
+  await reconsiderFromDisplayedState(service, 'action-1', now)
   repository.advanceSeconds(1)
   await startFromDisplayedState(service, 'action-1', now)
 
@@ -428,7 +490,7 @@ test('rejects Skip for an in-progress action and plan item', async () => {
   const service = new TodayService(repository)
 
   await startFromDisplayedState(service, 'action-1', now)
-  await assert.rejects(() => service.skipPlanItem(userId, 'action-1', now), /Invalid atomic Today action operation/)
+  await assert.rejects(async () => service.skipPlanItem(await service.planToday(userId, now), 'action-1'), /pending Today plan item/)
 
   assert.equal(repository.data.actions[0].status, 'in_progress')
   assert.equal(repository.planItems[0].status, 'in_progress')
@@ -516,7 +578,7 @@ test('returns the action records needed to present deferred work after replannin
   const repository = new MemoryRyqenRepository([createAction('action-1')])
   const service = new TodayService(repository)
 
-  const state = await service.deferAction(userId, 'action-1', now)
+  const state = await deferFromDisplayedState(service, 'action-1', now)
 
   assert.equal(state.actions.find((action) => action.id === 'action-1')?.status, 'deferred')
   assert.equal(state.planItems.find((item) => item.actionId === 'action-1')?.status, 'deferred')
@@ -584,7 +646,7 @@ test('keeps the other active action visible after deferring one active action', 
 
   await startFromDisplayedState(service, 'action-1', now)
   await startFromDisplayedState(service, 'action-2', now)
-  const state = await service.deferAction(userId, 'action-1', now)
+  const state = await deferFromDisplayedState(service, 'action-1', now)
 
   assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-2'])
   assert.equal(state.actions.find((action) => action.id === 'action-1')?.status, 'deferred')
@@ -598,7 +660,7 @@ test('keeps active work visible when Skip replans another plan item', async () =
 
   await startFromDisplayedState(service, 'action-1', now)
   await startFromDisplayedState(service, 'action-2', now)
-  const state = await service.skipPlanItem(userId, 'action-3', now)
+  const state = await skipFromDisplayedState(service, 'action-3', now)
 
   assert.deepEqual(state.activeWork.map((item) => item.action.id).sort(), ['action-1', 'action-2'])
   assert.equal(state.planItems.find((item) => item.actionId === 'action-3')?.status, 'skipped')
@@ -612,8 +674,8 @@ test('keeps active work visible when Reconsider replans another plan item', asyn
 
   await startFromDisplayedState(service, 'action-1', now)
   await startFromDisplayedState(service, 'action-2', now)
-  await service.deferAction(userId, 'action-3', now)
-  const state = await service.reconsiderDeferredAction(userId, 'action-3', now)
+  await deferFromDisplayedState(service, 'action-3', now)
+  const state = await reconsiderFromDisplayedState(service, 'action-3', now)
 
   assert.deepEqual(state.activeWork.map((item) => item.action.id).sort(), ['action-1', 'action-2'])
   assert.equal(state.actions.find((action) => action.id === 'action-3')?.status, 'pending')
@@ -654,7 +716,7 @@ test('keeps active work controllable when its parent becomes paused after Start'
   const state = await service.planToday(userId, now)
   assert.deepEqual(state.activeWork.map((item) => item.action.id), ['action-1'])
   assert.deepEqual(state.priorities, [])
-  await service.deferAction(userId, 'action-1', now)
+  await deferFromDisplayedState(service, 'action-1', now)
   assert.equal(repository.data.actions[0].status, 'deferred')
 })
 
@@ -668,7 +730,7 @@ test('removes completed or deferred active work and resumes normal recommendatio
   assert.deepEqual(completed.priorities.map((item) => item.action.id), ['action-2'])
 
   await startFromDisplayedState(service, 'action-2', now)
-  const deferred = await service.deferAction(userId, 'action-2', now)
+  const deferred = await deferFromDisplayedState(service, 'action-2', now)
   assert.deepEqual(deferred.activeWork, [])
   assert.deepEqual(deferred.priorities, [])
 })
@@ -691,11 +753,29 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   assert.equal(action.status, 'pending')
   assert.equal(action.importance, 5)
   assert.equal(action.estimatedMinutes, 60)
+  assert.equal(action.dueDate, '2026-09-12')
+  assert.equal(action.dueTime, null)
+  assert.equal(action.dueAt, null)
   assert.equal(captureResult.capturedActionId, action.id)
   assert.equal(state.priorities[0].action.id, action.id)
   assert.equal(repository.plans.length, 1)
   assert.equal(repository.activities.length, 0)
   assert.equal('userId' in repository.captureInputs[0], false)
+})
+
+test('captures a custom local date and optional time without changing legacy due_at', async () => {
+  const repository = new MemoryRyqenRepository([])
+  const service = new TodayService(repository)
+
+  await service.captureAction(userId, {
+    title: 'Call at a specific time', dueTiming: 'custom', customDueDate: '2026-09-16', customDueTime: '14:30', importance: 'normal', effort: '15',
+  }, now)
+
+  assert.deepEqual(repository.captureInputs[0], {
+    title: 'Call at a specific time', dueDate: '2026-09-16', dueTime: '14:30', importance: 3, estimatedMinutes: 15,
+  })
+  assert.equal(repository.data.actions[0].dueAt, null)
+  assert.equal(repository.activities.length, 0)
 })
 
 test('rejects invalid captured titles before repository persistence', async () => {
@@ -885,11 +965,17 @@ test('multiple overnight Active Work items remain visible and an individual item
   const overnight = await service.planToday(userId, dayTwo)
   assert.deepEqual(overnight.activeWork.map((work) => work.action.id).sort(), ['active-1', 'active-2'])
   assert.deepEqual(overnight.priorities.map((priority) => priority.action.id), ['pending'])
+  const loadsBeforeDefer = repository.planningLoads
+  const reconciliationsBeforeDefer = repository.reconciliations
 
-  const deferred = await service.deferAction(userId, 'active-1', dayTwo)
+  const deferred = await service.deferAction(overnight, 'active-1')
+  assert.equal(repository.deferRpcCalls, 1)
+  assert.equal(repository.planningLoads, loadsBeforeDefer)
+  assert.equal(repository.reconciliations, reconciliationsBeforeDefer)
   assert.equal(repository.data.actions.find((action) => action.id === 'active-1').status, 'deferred')
   assert.deepEqual(deferred.activeWork.map((work) => work.action.id), ['active-2'])
   assert.deepEqual(deferred.deferredWork.map((work) => work.action.id), ['active-1'])
+  assert.equal(deferred.planItems.some((item) => item.actionId === 'active-1'), false)
   assert.deepEqual(repository.activities.map((activity) => activity.type), [
     'action_started', 'plan_item_started', 'action_started', 'plan_item_started', 'action_deferred',
   ])
@@ -901,19 +987,27 @@ test('previous-day deferred work stays secondary and can be explicitly reconside
   const dayOne = new Date(2026, 8, 12, 9, 0, 0)
   const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
 
-  await service.deferAction(userId, 'deferred-action', dayOne)
+  await deferFromDisplayedState(service, 'deferred-action', dayOne)
   const yesterdayItem = structuredClone(repository.planItems[0])
   const overnight = await service.planToday(userId, dayTwo)
   assert.equal(overnight.plan, null)
   assert.equal(repository.data.actions[0].status, 'deferred')
   assert.deepEqual(overnight.deferredWork.map((work) => work.action.id), ['deferred-action'])
   assert.deepEqual(overnight.priorities, [])
+  const loadsBeforeReconsider = repository.planningLoads
+  const reconciliationsBeforeReconsider = repository.reconciliations
 
-  const reconsidered = await service.reconsiderDeferredAction(userId, 'deferred-action', dayTwo)
+  const reconsidered = await service.reconsiderDeferredAction(overnight, 'deferred-action')
+  assert.equal(repository.reconsiderRpcCalls, 1)
+  assert.equal(repository.planningLoads, loadsBeforeReconsider)
+  assert.equal(repository.reconciliations, reconciliationsBeforeReconsider)
   assert.equal(repository.data.actions[0].status, 'pending')
   assert.equal(repository.planItems.find((item) => item.id === yesterdayItem.id)?.status, 'pending')
   assert.deepEqual(reconsidered.deferredWork, [])
-  assert.deepEqual(reconsidered.priorities.map((priority) => priority.action.id), ['deferred-action'])
+  assert.deepEqual(reconsidered.priorities, [])
+  assert.equal(reconsidered.planItems.some((item) => item.id === yesterdayItem.id), false)
+  const afterRevalidation = await service.planToday(userId, dayTwo)
+  assert.deepEqual(afterRevalidation.priorities.map((priority) => priority.action.id), ['deferred-action'])
   assert.deepEqual(repository.activities.map((activity) => activity.type), ['action_deferred'])
 })
 
@@ -923,8 +1017,8 @@ test('a skipped yesterday plan item leaves persistent pending work eligible for 
   const dayOne = new Date(2026, 8, 12, 9, 0, 0)
   const dayTwo = new Date(2026, 8, 13, 9, 0, 0)
 
-  await service.planToday(userId, dayOne)
-  await service.skipPlanItem(userId, 'skipped-action', dayOne)
+  const dayOneState = await service.planToday(userId, dayOne)
+  await service.skipPlanItem(dayOneState, 'skipped-action')
   const today = await service.planToday(userId, dayTwo)
 
   assert.equal(repository.data.actions[0].status, 'pending')
@@ -949,7 +1043,7 @@ test('cross-day lifecycle discovery is isolated to the authenticated user', asyn
   const state = await service.planToday(userId, new Date(2026, 8, 13, 9, 0, 0))
   assert.equal(state.actions.some((action) => action.id === 'other-deferred'), false)
   assert.equal(state.deferredWork.some((work) => work.action.id === 'other-deferred'), false)
-  await assert.rejects(() => service.reconsiderDeferredAction(userId, 'other-deferred'), /There is no deferred plan item/)
+  await assert.rejects(() => service.reconsiderDeferredAction(state, 'other-deferred'), /There is no deferred plan item/)
   assert.equal(otherAction.status, 'deferred')
   assert.equal(repository.planItems.find((item) => item.id === 'other-item')?.status, 'deferred')
 })
@@ -964,7 +1058,7 @@ test('a compatible Today backend contract permits normal planning', async () => 
   assert.equal(repository.todayBackendContractChecks, 1)
 })
 
-test('an incompatible Today backend contract prevents planning and every write-first Today operation', async () => {
+test('an incompatible Today backend contract prevents loading a mutable Today snapshot and write-first operations', async () => {
   const repository = new MemoryRyqenRepository([createAction('action-1')])
   repository.todayBackendContractVersion = 0
   const service = new TodayService(repository)
@@ -976,8 +1070,6 @@ test('an incompatible Today backend contract prevents planning and every write-f
   await assert.rejects(() => service.applyTodayCheckIn(userId, {
     availableTimeMinutes: 30, capacity: 'medium',
   }, now), { name: 'TodayBackendCompatibilityError' })
-  await assert.rejects(() => service.reconsiderDeferredAction(userId, 'action-1', now), { name: 'TodayBackendCompatibilityError' })
-
   assert.equal(repository.plans.length, 0)
   assert.equal(repository.captureInputs.length, 0)
   assert.equal(repository.data.contexts.length, 0)

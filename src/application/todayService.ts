@@ -79,6 +79,13 @@ function replaceCurrentPlanItem(planItems: PlanItem[], planItem: PlanItem): Plan
   return planItems.map((item) => item.id === planItem.id ? planItem : item)
 }
 
+function pendingCurrentPlanItem(state: TodayPlanState, actionId: string): PlanItem | null {
+  const priority = state.priorities.find((item) => item.action.id === actionId)
+  const planItem = state.planItems.find((item) => item.actionId === actionId && item.status === 'pending') ?? null
+  if (!state.plan || !priority || priority.action.status !== 'pending' || !planItem || planItem.dailyPlanId !== state.plan.id) return null
+  return planItem
+}
+
 function activeWorkFromMutation(
   result: TodayActionMutationResult,
   previous: PriorityAction | undefined,
@@ -118,6 +125,42 @@ function applyCompleteMutation(state: TodayPlanState, result: TodayActionMutatio
     planItems: replaceCurrentPlanItem(state.planItems, result.planItem),
     priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
     activeWork: state.activeWork.filter((work) => work.action.id !== result.action.id),
+  }
+}
+
+/** Applies a Defer RPC result without moving a historical anchor into Today. */
+function applyDeferMutation(state: TodayPlanState, result: TodayActionMutationResult): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, result.action),
+    planItems: replaceCurrentPlanItem(state.planItems, result.planItem),
+    priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
+    activeWork: state.activeWork.filter((work) => work.action.id !== result.action.id),
+    deferredWork: [
+      ...state.deferredWork.filter((work) => work.action.id !== result.action.id),
+      { action: result.action, planItem: result.planItem },
+    ],
+  }
+}
+
+/** Applies a Reconsider RPC result without treating its historical item as current. */
+function applyReconsiderMutation(state: TodayPlanState, result: TodayActionMutationResult): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, result.action),
+    planItems: replaceCurrentPlanItem(state.planItems, result.planItem),
+    priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
+    deferredWork: state.deferredWork.filter((work) => work.action.id !== result.action.id),
+  }
+}
+
+/** Skip changes only the current Plan Item; the persistent Action stays pending. */
+function applySkipMutation(state: TodayPlanState, result: TodayActionMutationResult): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, result.action),
+    planItems: replaceCurrentPlanItem(state.planItems, result.planItem),
+    priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
   }
 }
 
@@ -276,8 +319,8 @@ export class TodayService {
 
   async startAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
     const priority = state.priorities.find((item) => item.action.id === actionId)
-    const planItem = state.planItems.find((item) => item.actionId === actionId && item.status === 'pending')
-    if (!state.plan || !priority || priority.action.status !== 'pending' || !planItem || planItem.dailyPlanId !== state.plan.id) {
+    const planItem = pendingCurrentPlanItem(state, actionId)
+    if (!priority || !planItem) {
       throw new Error('There is no pending Today plan item for this action')
     }
     const result = await this.repository.startTodayAction(planItem.dailyPlanId, actionId)
@@ -311,29 +354,29 @@ export class TodayService {
     return applyPauseResumeMutation(state, result, 'resume')
   }
 
-  async deferAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    const state = await this.planToday(userId, now)
-    const action = state.actions.find((item) => item.id === actionId)
-    const planItem = action?.status === 'in_progress'
-      ? await this.repository.findPlanItemForActionStatus(userId, actionId, 'in_progress')
-      : state.planItems.find((item) => item.actionId === actionId && item.status === 'pending') ?? null
+  async deferAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const activeWork = state.activeWork.find((work) => work.action.id === actionId)
+    const planItem = activeWork?.action.status === 'in_progress'
+      ? activeWork.planItem
+      : pendingCurrentPlanItem(state, actionId)
     if (!planItem) throw new Error('There is no deferrable Today plan item for this action')
-    await this.repository.deferTodayAction(planItem.dailyPlanId, actionId)
-    return this.planToday(userId, now)
+    const result = await this.repository.deferTodayAction(planItem.dailyPlanId, actionId)
+    return applyDeferMutation(state, result)
   }
 
-  async skipPlanItem(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    const state = await this.planToday(userId, now)
-    if (!state.plan) throw new Error('There is no active Today plan for this action')
-    await this.repository.skipTodayPlanItem(state.plan.id, actionId)
-    return this.planToday(userId, now)
+  async skipPlanItem(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const planItem = pendingCurrentPlanItem(state, actionId)
+    if (!planItem) throw new Error('There is no pending Today plan item for this action')
+    const result = await this.repository.skipTodayPlanItem(planItem.dailyPlanId, actionId)
+    return applySkipMutation(state, result)
   }
 
-  async reconsiderDeferredAction(userId: string, actionId: string, now = new Date()): Promise<TodayPlanState> {
-    await this.ensureTodayBackendContract()
-    const planItem = await this.repository.findPlanItemForActionStatus(userId, actionId, 'deferred')
-    if (!planItem) throw new Error('There is no deferred plan item for this action')
-    await this.repository.reconsiderTodayAction(planItem.dailyPlanId, actionId)
-    return this.planToday(userId, now)
+  async reconsiderDeferredAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const deferredWork = state.deferredWork.find((work) => work.action.id === actionId)
+    if (!deferredWork || deferredWork.action.status !== 'deferred') {
+      throw new Error('There is no deferred plan item for this action')
+    }
+    const result = await this.repository.reconsiderTodayAction(deferredWork.planItem.dailyPlanId, actionId)
+    return applyReconsiderMutation(state, result)
   }
 }
