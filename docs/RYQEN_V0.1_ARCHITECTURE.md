@@ -245,7 +245,7 @@ Reconciliation cannot use an invalid lifecycle Action to create a fresh pending 
 ### Hosted backend compatibility
 
 The Today client requires the authenticated read-only backend contract RPC
-`ryqen_today_backend_contract`, currently contract version `3`, before it
+`ryqen_today_backend_contract`, currently contract version `4`, before it
 loads plans or requests a Today mutation. This is a safety net that presents a
 clear backend-update message when the endpoint is absent or its version is
 unsupported; ordinary network/request failures remain ordinary Today refresh
