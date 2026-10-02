@@ -2,9 +2,9 @@ import { View, Text, ScrollView } from 'react-native'
 import { T } from '../constants'
 import { WaterTracker, FocusTimer } from '../components'
 
-type ToolsTabProps = { userId: string; xp: number; setXp: (xp: number) => void; showToast: (msg: string) => void }
+type ToolsTabProps = { userId: string; setXp: (xp: number) => void; showToast: (msg: string) => void }
 
-export function ToolsTab({ userId, xp, setXp, showToast }: ToolsTabProps) {
+export function ToolsTab({ userId, setXp, showToast }: ToolsTabProps) {
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
       <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 }}>
@@ -19,9 +19,9 @@ export function ToolsTab({ userId, xp, setXp, showToast }: ToolsTabProps) {
       <View style={{ marginTop: 28 }}>
         <FocusTimer
           userId={userId}
-          onSessionComplete={(xpEarned) => {
-            setXp(xp + xpEarned)
-            showToast(`+${xpEarned} XP  ·  END`)
+          onSessionComplete={({ xpAwarded, totalXp }) => {
+            setXp(totalXp)
+            showToast(xpAwarded > 0 ? `+${xpAwarded} XP  ·  END` : 'Focus session already recorded')
           }}
         />
       </View>

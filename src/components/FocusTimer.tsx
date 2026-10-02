@@ -9,7 +9,12 @@ import type { SavedTimer } from '../types'
 import { PickerColumn } from './PickerColumn'
 import { EditModal } from './EditModal'
 
-type FocusTimerProps = { userId: string; onSessionComplete: (xp: number) => void }
+type FocusSessionResult = {
+  xpAwarded: number
+  totalXp: number
+}
+
+type FocusTimerProps = { userId: string; onSessionComplete: (result: FocusSessionResult) => void }
 
 export function FocusTimer({ userId, onSessionComplete }: FocusTimerProps) {
   // Setup state
@@ -40,6 +45,8 @@ export function FocusTimer({ userId, onSessionComplete }: FocusTimerProps) {
   const pulseAnim = useRef(new Animated.Value(1)).current
   const completionSound = useAudioPlayer('https://actions.google.com/sounds/v1/alarms/medium_bell_ringing_near.ogg')
   const originalTotalSeconds = useRef(0)
+  const completionInFlightRef = useRef(false)
+  const completionSessionIdRef = useRef<string | null>(null)
 
   const timerColor = sessionType === 'meditation' ? '#BF5AF2' : '#0A84FF'
   const progress = originalTotalSeconds.current > 0 ? 1 - (totalSecondsLeft / originalTotalSeconds.current) : 0
@@ -81,6 +88,7 @@ export function FocusTimer({ userId, onSessionComplete }: FocusTimerProps) {
   function startSession(h: number, m: number, s: number, label: string, type: 'meditation' | 'focus') {
     const total = h * 3600 + m * 60 + s
     if (total === 0) return
+    completionSessionIdRef.current = null
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
     setTotalSecondsLeft(total)
     originalTotalSeconds.current = total
@@ -125,25 +133,49 @@ export function FocusTimer({ userId, onSessionComplete }: FocusTimerProps) {
   }, [isRunning])
 
   async function handleComplete() {
+    if (completionInFlightRef.current) return
+    completionInFlightRef.current = true
     setIsRunning(false)
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-    try { completionSound.seekTo(0); completionSound.play() } catch (e) { }
-    const today = new Date().toLocaleDateString('en-CA')
     const totalMins = Math.round(originalTotalSeconds.current / 60)
-    await supabase.from('focus_sessions').insert({ user_id: userId, duration_minutes: totalMins, type: sessionType, date: today })
-    const xpEarned = totalMins * 5
-    onSessionComplete(xpEarned)
-    loadHistory()
-    Alert.alert(
-      sessionType === 'meditation' ? '🧘 Meditation Complete' : '🎯 Focus Session Complete',
-      `+${xpEarned} XP earned. The System acknowledges your discipline.`,
-      [{
-        text: 'OK',
-        onPress: () => {
-          try { completionSound.pause() } catch (e) { }
-        }
-      }]
-    )
+    const sessionId = completionSessionIdRef.current ?? crypto.randomUUID()
+    completionSessionIdRef.current = sessionId
+
+    try {
+      const { data, error } = await supabase.rpc('ryqen_record_focus_session', {
+        p_session_id: sessionId,
+        p_duration_minutes: totalMins,
+        p_type: sessionType,
+      })
+
+      if (error) throw error
+      if (!data || typeof data.xp_awarded !== 'number' || typeof data.total_xp !== 'number') {
+        throw new Error('Focus session was recorded without an authoritative XP result.')
+      }
+
+      const result = { xpAwarded: data.xp_awarded, totalXp: data.total_xp }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      try { completionSound.seekTo(0); completionSound.play() } catch (e) { }
+      onSessionComplete(result)
+      completionSessionIdRef.current = null
+      loadHistory()
+      Alert.alert(
+        sessionType === 'meditation' ? '🧘 Meditation Complete' : '🎯 Focus Session Complete',
+        result.xpAwarded > 0
+          ? `+${result.xpAwarded} XP earned. The System acknowledges your discipline.`
+          : 'This focus session was already recorded.',
+        [{
+          text: 'OK',
+          onPress: () => {
+            try { completionSound.pause() } catch (e) { }
+          }
+        }]
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? `\n\n${error.message}` : ''
+      Alert.alert('Focus session needs attention', `We couldn't confirm the XP award. It may already be recorded.${detail}`)
+    } finally {
+      completionInFlightRef.current = false
+    }
   }
 
   function pauseTimer() {

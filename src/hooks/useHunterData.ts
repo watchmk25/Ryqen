@@ -32,11 +32,6 @@ export function useHunterData(userId: string | undefined) {
     initCharacter()
   }, [userId])
 
-  useEffect(() => {
-    if (!userId || dataLoading) return
-    supabase.from('characters').update({ total_xp: xp, level: calcLevel(xp) }).eq('user_id', userId).then(() => { })
-  }, [xp])
-
   async function initCharacter() {
     try {
       const { data, error: characterError } = await supabase.from('characters').select('*').eq('user_id', userId!).maybeSingle()

@@ -85,7 +85,7 @@ checkStreakForToday,
             <View style={{ flex: 1 }}>
               {activeTab === 'home' && <HomeTab userId={user!.id} userName={character.name} rank={character.rank} onNavigateToTools={(tool) => { setActiveTab('tools'); setToolsFocusTarget(tool) }} />}
               {activeTab === 'stats' && <StatsTab xp={xp} character={character} userId={user!.id} currentStreak={currentStreak} longestStreak={longestStreak} streakShields={streakShields} />}
-              {activeTab === 'tools' && <ToolsTab userId={user!.id} xp={xp} setXp={setXp} showToast={showToast} />}
+              {activeTab === 'tools' && <ToolsTab userId={user!.id} setXp={setXp} showToast={showToast} />}
               {activeTab === 'profile' && <ProfileTab character={character} setCharacter={setCharacter} />}
             </View>
           )}
