@@ -763,6 +763,25 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   assert.equal('userId' in repository.captureInputs[0], false)
 })
 
+test('a newly initialized user can begin with an empty Today and receive a planned action through capture', async () => {
+  const repository = new MemoryRyqenRepository([])
+  const service = new TodayService(repository)
+
+  const initial = await service.planToday(userId, now)
+  assert.equal(initial.plan, null)
+  assert.equal(initial.emptyState, 'no_pending_work')
+  assert.equal(repository.plans.length, 0)
+
+  const captured = await service.captureAction(userId, {
+    title: 'First meaningful action', dueTiming: 'none', importance: 'normal', effort: '15',
+  }, now)
+
+  assert.equal(captured.state.priorities.length, 1)
+  assert.equal(captured.state.priorities[0].action.title, 'First meaningful action')
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(repository.activities.length, 0)
+})
+
 test('captures a custom local date and optional time without changing legacy due_at', async () => {
   const repository = new MemoryRyqenRepository([])
   const service = new TodayService(repository)

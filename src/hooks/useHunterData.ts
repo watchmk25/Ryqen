@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { DEFAULT_CHARACTER, QUEST_POOL } from '../constants'
 import { calcLevel } from '../utils'
 import type { Quest, Character } from '../types'
-import { shouldShowHunterOnboarding } from './hunterOnboardingGate'
+import { ensureHunterInitialization } from './hunterInitialization'
 
 const MAX_SHIELDS = 3
 const SHIELD_EVERY_N_DAYS = 5
@@ -15,8 +15,7 @@ export function useHunterData(userId: string | undefined) {
   const [quests, setQuests] = useState<Quest[]>([])
   const [character, setCharacter] = useState<Character>(DEFAULT_CHARACTER)
   const [dataLoading, setDataLoading] = useState(true)
-  const [showOnboarding, setShowOnboarding] = useState(false)
-  const [showAssessment, setShowAssessment] = useState(false)
+  const [initializationError, setInitializationError] = useState<Error | null>(null)
   const prevLevelRef = useRef(calcLevel(0))
   const didInit = useRef(false)
 
@@ -33,41 +32,74 @@ export function useHunterData(userId: string | undefined) {
   }, [userId])
 
   async function initCharacter() {
+    setDataLoading(true)
+    setInitializationError(null)
+    let shouldLoadLegacyQuests = false
     try {
-      const { data, error: characterError } = await supabase.from('characters').select('*').eq('user_id', userId!).maybeSingle()
-      if (characterError) throw characterError
+      const data = await ensureHunterInitialization({
+        async read() {
+          const [characterResult, profileResult, abilitiesResult] = await Promise.all([
+            supabase.from('characters').select('*').eq('user_id', userId!).maybeSingle(),
+            supabase.from('hunter_profile').select('user_id').eq('user_id', userId!).maybeSingle(),
+            supabase.from('hunter_abilities').select('user_id').eq('user_id', userId!).maybeSingle(),
+          ])
+          if (characterResult.error) throw characterResult.error
+          if (profileResult.error) throw profileResult.error
+          if (abilitiesResult.error) throw abilitiesResult.error
+          return {
+            character: characterResult.data,
+            hasProfile: profileResult.data !== null,
+            hasAbilities: abilitiesResult.data !== null,
+          }
+        },
+        async ensureCharacter() {
+          const { error } = await supabase.from('characters').upsert(
+            { user_id: userId! },
+            { onConflict: 'user_id', ignoreDuplicates: true },
+          )
+          if (error) throw error
+        },
+        async ensureProfile() {
+          const { error } = await supabase.from('hunter_profile').upsert(
+            { user_id: userId! },
+            { onConflict: 'user_id', ignoreDuplicates: true },
+          )
+          if (error) throw error
+        },
+        async ensureAbilities() {
+          const { error } = await supabase.from('hunter_abilities').upsert(
+            { user_id: userId! },
+            { onConflict: 'user_id', ignoreDuplicates: true },
+          )
+          if (error) throw error
+        },
+      })
 
-      if (data) {
-        setCharacter({ name: data.name, rank: data.rank, title: data.title, stats: { STR: data.str, INT: data.int, VIT: data.vit, AGI: data.agi, END: data.endurance } })
-        setXp(data.total_xp)
-        prevLevelRef.current = calcLevel(data.total_xp)
-        setCurrentStreak(data.current_streak || 0)
-        setLongestStreak(data.longest_streak || 0)
-        setStreakShields(data.streak_shields || 0)
-        setStreakCreditedDate(data.streak_credited_date || null)
-        const { data: profile, error: profileError } = await supabase.from('hunter_profile').select('onboarding_complete').eq('user_id', userId!).maybeSingle()
-        if (profileError) throw profileError
-        if (shouldShowHunterOnboarding({
-          characterOnboardingComplete: data.onboarding_complete,
-          profileOnboardingComplete: profile?.onboarding_complete,
-        })) setShowOnboarding(true)
-      } else {
-        const { data: profile, error: profileError } = await supabase.from('hunter_profile').select('onboarding_complete').eq('user_id', userId!).maybeSingle()
-        if (profileError) throw profileError
-        if (profile) {
-          throw new Error('Hunter profile exists without a character record')
-        }
-        await supabase.from('characters').insert({ user_id: userId! })
-        await supabase.from('hunter_profile').insert({ user_id: userId! })
-        await supabase.from('hunter_abilities').insert({ user_id: userId! })
-        setShowOnboarding(true)
-      }
-      if (data?.onboarding_complete) await loadQuests()
+      setCharacter({ name: data.name, rank: data.rank, title: data.title, stats: { STR: data.str, INT: data.int, VIT: data.vit, AGI: data.agi, END: data.endurance } })
+      setXp(data.total_xp)
+      prevLevelRef.current = calcLevel(data.total_xp)
+      setCurrentStreak(data.current_streak || 0)
+      setLongestStreak(data.longest_streak || 0)
+      setStreakShields(data.streak_shields || 0)
+      setStreakCreditedDate(data.streak_credited_date || null)
+      // Legacy quests retain their existing completion-based behavior. They
+      // are not required for the authenticated Today Command Center.
+      shouldLoadLegacyQuests = data?.onboarding_complete === true
     } catch (e) {
       console.log('initCharacter error:', e)
+      setInitializationError(e instanceof Error ? e : new Error('Unable to prepare your account.'))
     } finally {
       setDataLoading(false)
     }
+
+    if (shouldLoadLegacyQuests) {
+      void loadQuests().catch((error) => console.log('loadQuests error:', error))
+    }
+  }
+
+  function retryInitialization() {
+    if (!userId || dataLoading) return
+    void initCharacter()
   }
 
   // Called live, every time a quest is toggled — credits or un-credits *today* immediately.
@@ -180,8 +212,8 @@ export function useHunterData(userId: string | undefined) {
     quests, setQuests,
     character, setCharacter,
     dataLoading,
-    showOnboarding, setShowOnboarding,
-    showAssessment, setShowAssessment,
+    initializationError,
+    retryInitialization,
     prevLevelRef,
     loadQuests,
     currentStreak, longestStreak, streakShields, streakEvent,

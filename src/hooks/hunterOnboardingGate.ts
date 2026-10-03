@@ -17,3 +17,14 @@ export function hasCompletedHunterOnboarding({
 export function shouldShowHunterOnboarding(flags: HunterOnboardingFlags): boolean {
   return !hasCompletedHunterOnboarding(flags)
 }
+
+/**
+ * Today requires a successful account initialization, not completion of the
+ * preserved legacy Hunter onboarding flow.
+ */
+export function canEnterTodayAfterHunterInitialization(
+  dataLoading: boolean,
+  initializationError: Error | null,
+): boolean {
+  return !dataLoading && initializationError === null
+}
