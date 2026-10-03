@@ -12,6 +12,9 @@ export interface WorkCaptureInput {
   importance: CaptureImportance
   effort: CaptureEffort
   customEstimatedMinutes?: number
+  /** Optional direct parent; Task remains deliberately hidden in this slice. */
+  parentGoalId?: string | null
+  parentProjectId?: string | null
 }
 
 export interface PreparedWorkCapture {

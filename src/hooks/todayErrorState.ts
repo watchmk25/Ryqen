@@ -1,8 +1,9 @@
-export type TodayMutationOperation = 'start' | 'pause' | 'resume' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'capture' | 'check_in'
+export type TodayMutationOperation = 'start' | 'pause' | 'resume' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'capture' | 'check_in' | 'structured_work'
 
 export interface TodayCommandError {
   source: 'mutation' | 'reload' | 'compatibility'
   message: string
+  operation?: TodayMutationOperation
 }
 
 export type TodayErrorEvent =
@@ -23,6 +24,7 @@ const mutationMessages: Record<TodayMutationOperation, string> = {
   reconsider: "Couldn't reconsider this action. Your plan was refreshed.",
   capture: "Couldn't add this work. Your plan was refreshed.",
   check_in: "Couldn't update today's availability. Your plan was refreshed.",
+  structured_work: "Couldn't update your plan. Your workspace was refreshed.",
 }
 
 /** Keeps recovery feedback visible without exposing raw backend error text. */
@@ -35,7 +37,7 @@ export function transitionTodayError(
     case 'mutation_succeeded':
       return null
     case 'mutation_failed':
-      return { source: 'mutation', message: mutationMessages[event.operation] }
+      return { source: 'mutation', operation: event.operation, message: mutationMessages[event.operation] }
     case 'reload_succeeded':
       return event.preserveExisting ? current : null
     case 'reload_failed':

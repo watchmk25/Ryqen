@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState, type AppStateStatus } from 'react-native'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
-import type { TodayCheckInInput, TodayPlanState, WorkCaptureInput } from '../domain'
+import type { GoalDraft, GoalUpdate, ProjectDraft, ProjectUpdate, TodayCheckInInput, TodayPlanState, WorkCaptureInput } from '../domain'
 import { isTodayBackendCompatibilityError } from '../domain'
 import { acknowledgementForTodayAction, type TodayAcknowledgement } from './todayAcknowledgement'
 import { canMutateToday, transitionTodayAvailability, type TodayAvailability } from './todayAvailabilityState'
@@ -22,6 +22,7 @@ export function useTodayPlan(userId: string | undefined) {
   const pendingActionRef = useRef<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [checkingIn, setCheckingIn] = useState(false)
+  const [organizing, setOrganizing] = useState(false)
   const [error, setError] = useState<TodayCommandError | null>(null)
   const [acknowledgement, setAcknowledgement] = useState<TodayAcknowledgement | null>(null)
   const [availability, setAvailability] = useState<TodayAvailability>('current')
@@ -218,6 +219,39 @@ export function useTodayPlan(userId: string | undefined) {
     }
   }, [applyAvailability, applyError, reload, replaceState, service, userId])
 
+  const updateStructuredWork = useCallback(async (
+    operation: 'create_goal' | 'update_goal' | 'create_project' | 'update_project',
+    id: string | null,
+    input: GoalDraft | GoalUpdate | ProjectDraft | ProjectUpdate,
+  ): Promise<boolean> => {
+    if (!userId || !canMutateToday(availabilityRef.current)) return false
+
+    setOrganizing(true)
+    setAcknowledgement(null)
+    applyError({ type: 'clear' })
+    try {
+      const nextState = operation === 'create_goal'
+        ? await service.createGoal(userId, input as GoalDraft)
+        : operation === 'update_goal'
+          ? await service.updateGoal(userId, id!, input as GoalUpdate)
+          : operation === 'create_project'
+            ? await service.createProject(userId, input as ProjectDraft)
+            : await service.updateProject(userId, id!, input as ProjectUpdate)
+      replaceState(nextState)
+      applyAvailability({ type: 'received_current_state' })
+      applyError({ type: 'mutation_succeeded' })
+      return true
+    } catch (error) {
+      applyError(isTodayBackendCompatibilityError(error)
+        ? { type: 'backend_incompatible' }
+        : { type: 'mutation_failed', operation: 'structured_work' })
+      await reload({ preserveError: true })
+      return false
+    } finally {
+      setOrganizing(false)
+    }
+  }, [applyAvailability, applyError, reload, replaceState, service, userId])
+
   return {
     state,
     loading,
@@ -226,6 +260,7 @@ export function useTodayPlan(userId: string | undefined) {
     pendingOperation,
     capturing,
     checkingIn,
+    organizing,
     error,
     acknowledgement,
     isTodayUnavailable: !canMutateToday(availability),
@@ -240,5 +275,9 @@ export function useTodayPlan(userId: string | undefined) {
     reconsiderDeferredAction: (actionId: string) => perform('reconsider', actionId),
     captureAction,
     applyTodayCheckIn,
+    createGoal: (input: GoalDraft) => updateStructuredWork('create_goal', null, input),
+    updateGoal: (goalId: string, input: GoalUpdate) => updateStructuredWork('update_goal', goalId, input),
+    createProject: (input: ProjectDraft) => updateStructuredWork('create_project', null, input),
+    updateProject: (projectId: string, input: ProjectUpdate) => updateStructuredWork('update_project', projectId, input),
   }
 }

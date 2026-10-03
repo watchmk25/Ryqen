@@ -1,6 +1,7 @@
 import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities } from '../domain/planning'
 import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayCheckIn'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
+import { prepareCaptureParent, prepareGoalDraft, prepareGoalUpdate, prepareProjectDraft, prepareProjectUpdate, type GoalDraft, type GoalUpdate, type ProjectDraft, type ProjectUpdate } from '../domain/structuredWork'
 import { assertTodayBackendContractVersion } from '../domain/todayBackendContract'
 import type { ActiveWork, DeferredWork, PausedWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
 import type { RyqenRepository, TodayActionMutationResult } from '../data/ryqenRepository'
@@ -29,11 +30,15 @@ function latestPlanItemsByAction(planItems: PlanItem[]): Map<string, PlanItem> {
 }
 
 function priorityForAction(action: PlanningData['actions'][number], planItem: PlanItem | null, data: PlanningData): PriorityAction {
+  const task = action.taskId ? data.tasks.find((item) => item.id === action.taskId) ?? null : null
+  const projectId = action.projectId ?? task?.projectId ?? null
+  const project = projectId ? data.projects.find((item) => item.id === projectId) ?? null : null
+  const goalId = action.goalId ?? task?.goalId ?? project?.goalId ?? null
   return {
     action,
-    task: action.taskId ? data.tasks.find((task) => task.id === action.taskId) ?? null : null,
-    project: action.projectId ? data.projects.find((project) => project.id === action.projectId) ?? null : null,
-    goal: action.goalId ? data.goals.find((goal) => goal.id === action.goalId) ?? null : null,
+    task,
+    project,
+    goal: goalId ? data.goals.find((goal) => goal.id === goalId) ?? null : null,
     estimatedMinutes: planItem?.estimatedMinutes ?? action.estimatedMinutes ?? 30,
     priorityScore: planItem?.priorityScore ?? 0,
     rationale: planItem?.rationale ?? 'Already in progress',
@@ -241,6 +246,8 @@ export class TodayService {
           deferredWork,
           priorities: [],
           actions: data.actions,
+          goals: data.goals,
+          projects: data.projects,
           planningContext,
           emptyState: deriveTodayEmptyState(data, planningContext, { excludedActionIds: activeActionIds, hasActiveWork: activeWork.length > 0 }, now),
         }
@@ -298,6 +305,8 @@ export class TodayService {
       deferredWork,
       priorities: currentPriorities,
       actions: data.actions,
+      goals: data.goals,
+      projects: data.projects,
       planningContext,
       emptyState,
     }
@@ -306,8 +315,44 @@ export class TodayService {
   async captureAction(userId: string, input: WorkCaptureInput, now = new Date()): Promise<TodayCaptureResult> {
     await this.ensureTodayBackendContract()
     const capture = prepareWorkCapture(input, now)
+    const parent = prepareCaptureParent(input)
+    if (parent.goalId && !await this.repository.findActiveGoal(userId, parent.goalId)) {
+      throw new Error('Choose an active goal for this action.')
+    }
+    if (parent.projectId && !await this.repository.findActiveProject(userId, parent.projectId)) {
+      throw new Error('Choose an active project for this action.')
+    }
     const action = await this.repository.createCapturedAction(capture)
+    if (parent.goalId || parent.projectId) {
+      await this.repository.updateActionParent(action.id, parent)
+    }
     return { state: await this.planToday(userId, now), capturedActionId: action.id }
+  }
+
+  async createGoal(userId: string, input: GoalDraft, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
+    await this.repository.createGoal({ userId, ...prepareGoalDraft(input) })
+    return this.planToday(userId, now)
+  }
+
+  async updateGoal(userId: string, goalId: string, input: GoalUpdate, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
+    await this.repository.updateGoal(goalId, prepareGoalUpdate(input))
+    return this.planToday(userId, now)
+  }
+
+  async createProject(userId: string, input: ProjectDraft, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
+    const goal = input.goalId ? await this.repository.findActiveGoal(userId, input.goalId) : null
+    await this.repository.createProject({ userId, ...prepareProjectDraft(input, goal ? [goal] : []) })
+    return this.planToday(userId, now)
+  }
+
+  async updateProject(userId: string, projectId: string, input: ProjectUpdate, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
+    const goal = input.goalId ? await this.repository.findActiveGoal(userId, input.goalId) : null
+    await this.repository.updateProject(projectId, prepareProjectUpdate(input, goal ? [goal] : []))
+    return this.planToday(userId, now)
   }
 
   async applyTodayCheckIn(userId: string, input: TodayCheckInInput, now = new Date()): Promise<TodayPlanState> {

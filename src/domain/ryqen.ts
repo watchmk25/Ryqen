@@ -241,6 +241,9 @@ export interface TodayPlanState {
   deferredWork: DeferredWork[]
   priorities: PriorityAction[]
   actions: Action[]
+  /** Current user-owned structured work, supplied for Today-adjacent planning UI. */
+  goals: Goal[]
+  projects: Project[]
   planningContext: PlanningContext
   emptyState: TodayEmptyState
 }

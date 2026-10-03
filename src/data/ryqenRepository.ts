@@ -64,6 +64,47 @@ export interface CreateCapturedActionInput {
   estimatedMinutes: number
 }
 
+export interface CreateGoalInput {
+  userId: string
+  title: string
+  description: string | null
+  status: GoalStatus
+  importance: number
+  targetDate: string | null
+}
+
+export interface UpdateGoalInput {
+  title?: string
+  description?: string | null
+  status?: GoalStatus
+  importance?: number
+  targetDate?: string | null
+}
+
+export interface CreateProjectInput {
+  userId: string
+  goalId: string | null
+  title: string
+  description: string | null
+  status: ProjectStatus
+  importance: number
+  targetDate: string | null
+}
+
+export interface UpdateProjectInput {
+  goalId?: string | null
+  title?: string
+  description?: string | null
+  status?: ProjectStatus
+  importance?: number
+  targetDate?: string | null
+}
+
+export interface UpdateActionParentInput {
+  goalId: string | null
+  projectId: string | null
+}
+
 export interface CreateContextInput {
   userId: string
   key: string
@@ -79,6 +120,8 @@ export interface CreateContextInput {
 export interface RyqenRepository {
   getTodayBackendContractVersion(): Promise<number>
   loadPlanningData(userId: string): Promise<PlanningData>
+  findActiveGoal(userId: string, goalId: string): Promise<Goal | null>
+  findActiveProject(userId: string, projectId: string): Promise<Project | null>
   listRecentActivities(userId: string): Promise<ActivityHistoryRecord[]>
   createContexts(inputs: CreateContextInput[]): Promise<Context[]>
   findDailyPlan(userId: string, planDate: string): Promise<DailyPlan | null>
@@ -88,7 +131,12 @@ export interface RyqenRepository {
   listPlanItemsForActionStatuses(userId: string, statuses: PlanItemStatus[]): Promise<PlanItem[]>
   findPlanItemForActionStatus(userId: string, actionId: string, status: PlanItemStatus): Promise<PlanItem | null>
   reconcileTodayPlan(input: ReconcileTodayPlanInput): Promise<void>
+  createGoal(input: CreateGoalInput): Promise<Goal>
+  updateGoal(id: string, input: UpdateGoalInput): Promise<Goal>
+  createProject(input: CreateProjectInput): Promise<Project>
+  updateProject(id: string, input: UpdateProjectInput): Promise<Project>
   createCapturedAction(input: CreateCapturedActionInput): Promise<Action>
+  updateActionParent(id: string, input: UpdateActionParentInput): Promise<Action>
   startTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   pauseTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   resumeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
@@ -247,6 +295,20 @@ export class SupabaseRyqenRepository implements RyqenRepository {
     }
   }
 
+  async findActiveGoal(userId: string, goalId: string): Promise<Goal | null> {
+    const result = await supabase.from('goals').select('*')
+      .eq('id', goalId).eq('user_id', userId).eq('status', 'active').maybeSingle()
+    const data = unwrap(result.data, result.error, 'Find active goal')
+    return data ? mapGoal(data as DatabaseRow) : null
+  }
+
+  async findActiveProject(userId: string, projectId: string): Promise<Project | null> {
+    const result = await supabase.from('projects').select('*')
+      .eq('id', projectId).eq('user_id', userId).eq('status', 'active').maybeSingle()
+    const data = unwrap(result.data, result.error, 'Find active project')
+    return data ? mapProject(data as DatabaseRow) : null
+  }
+
   async listRecentActivities(userId: string): Promise<ActivityHistoryRecord[]> {
     return readRecentActivityRecords(supabase as unknown as RecentActivityReadClient, userId)
   }
@@ -333,6 +395,54 @@ export class SupabaseRyqenRepository implements RyqenRepository {
     unwrap(result.data, result.error, 'Reconcile Today plan')
   }
 
+  async createGoal(input: CreateGoalInput): Promise<Goal> {
+    const result = await supabase.from('goals').insert({
+      user_id: input.userId,
+      title: input.title,
+      description: input.description,
+      status: input.status,
+      importance: input.importance,
+      target_date: input.targetDate,
+    }).select('*').single()
+    return mapGoal(unwrap(result.data, result.error, 'Create goal') as DatabaseRow)
+  }
+
+  async updateGoal(id: string, input: UpdateGoalInput): Promise<Goal> {
+    const values: DatabaseRow = {}
+    if (input.title !== undefined) values.title = input.title
+    if (input.description !== undefined) values.description = input.description
+    if (input.status !== undefined) values.status = input.status
+    if (input.importance !== undefined) values.importance = input.importance
+    if (input.targetDate !== undefined) values.target_date = input.targetDate
+    const result = await supabase.from('goals').update(values).eq('id', id).select('*').single()
+    return mapGoal(unwrap(result.data, result.error, 'Update goal') as DatabaseRow)
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    const result = await supabase.from('projects').insert({
+      user_id: input.userId,
+      goal_id: input.goalId,
+      title: input.title,
+      description: input.description,
+      status: input.status,
+      importance: input.importance,
+      target_date: input.targetDate,
+    }).select('*').single()
+    return mapProject(unwrap(result.data, result.error, 'Create project') as DatabaseRow)
+  }
+
+  async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
+    const values: DatabaseRow = {}
+    if (input.goalId !== undefined) values.goal_id = input.goalId
+    if (input.title !== undefined) values.title = input.title
+    if (input.description !== undefined) values.description = input.description
+    if (input.status !== undefined) values.status = input.status
+    if (input.importance !== undefined) values.importance = input.importance
+    if (input.targetDate !== undefined) values.target_date = input.targetDate
+    const result = await supabase.from('projects').update(values).eq('id', id).select('*').single()
+    return mapProject(unwrap(result.data, result.error, 'Update project') as DatabaseRow)
+  }
+
   async createCapturedAction(input: CreateCapturedActionInput): Promise<Action> {
     const result = await supabase.rpc('ryqen_capture_action', {
       p_title: input.title,
@@ -342,6 +452,14 @@ export class SupabaseRyqenRepository implements RyqenRepository {
       p_estimated_minutes: input.estimatedMinutes,
     })
     return mapAction(unwrap(result.data, result.error, 'Capture action') as DatabaseRow)
+  }
+
+  async updateActionParent(id: string, input: UpdateActionParentInput): Promise<Action> {
+    const result = await supabase.from('actions').update({
+      goal_id: input.goalId,
+      project_id: input.projectId,
+    }).eq('id', id).select('*').single()
+    return mapAction(unwrap(result.data, result.error, 'Attach action parent') as DatabaseRow)
   }
 
   private async runTodayActionRpc(

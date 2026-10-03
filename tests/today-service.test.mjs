@@ -25,6 +25,9 @@ class MemoryRyqenRepository {
     this.todayBackendContractError = null
     this.todayBackendContractChecks = 0
     this.planningLoads = 0
+    this.activeGoalLookups = 0
+    this.activeProjectLookups = 0
+    this.actionParentUpdateError = null
     this.reconciliations = 0
     this.startRpcCalls = 0
     this.completeRpcCalls = 0
@@ -72,6 +75,16 @@ class MemoryRyqenRepository {
       tasks: this.data.tasks.filter(owns),
       actions: this.data.actions.filter(owns),
     })
+  }
+  async findActiveGoal(ownerId, goalId) {
+    this.activeGoalLookups += 1
+    const goal = this.data.goals.find((item) => item.id === goalId && item.userId === ownerId && item.status === 'active') ?? null
+    return this.clone(goal)
+  }
+  async findActiveProject(ownerId, projectId) {
+    this.activeProjectLookups += 1
+    const project = this.data.projects.find((item) => item.id === projectId && item.userId === ownerId && item.status === 'active') ?? null
+    return this.clone(project)
   }
   async createContexts(inputs) {
     const contexts = inputs.map((input) => ({
@@ -130,6 +143,36 @@ class MemoryRyqenRepository {
       if (item.dailyPlanId === plan.id && item.status === 'pending' && !selected.has(item.actionId)) item.status = 'replaced'
     }
   }
+  async createGoal(input) {
+    const goal = {
+      id: this.nextId('goal'), userId: input.userId, title: input.title, description: input.description,
+      status: input.status, importance: input.importance, targetDate: input.targetDate,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    }
+    this.data.goals.push(goal)
+    return this.clone(goal)
+  }
+  async updateGoal(id, input) {
+    const goal = this.data.goals.find((item) => item.id === id)
+    if (!goal) throw new Error('Goal not found')
+    Object.assign(goal, input, { updatedAt: now.toISOString() })
+    return this.clone(goal)
+  }
+  async createProject(input) {
+    const project = {
+      id: this.nextId('project'), userId: input.userId, goalId: input.goalId, title: input.title, description: input.description,
+      status: input.status, importance: input.importance, targetDate: input.targetDate,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    }
+    this.data.projects.push(project)
+    return this.clone(project)
+  }
+  async updateProject(id, input) {
+    const project = this.data.projects.find((item) => item.id === id)
+    if (!project) throw new Error('Project not found')
+    Object.assign(project, input, { updatedAt: now.toISOString() })
+    return this.clone(project)
+  }
   async createCapturedAction(input) {
     this.captureInputs.push(this.clone(input))
     const action = createAction(this.nextId('captured-action'), {
@@ -140,6 +183,15 @@ class MemoryRyqenRepository {
       estimatedMinutes: input.estimatedMinutes,
     })
     this.data.actions.push(action)
+    return this.clone(action)
+  }
+  async updateActionParent(id, input) {
+    if (this.actionParentUpdateError) throw this.actionParentUpdateError
+    const action = this.data.actions.find((item) => item.id === id)
+    if (!action) throw new Error('Action not found')
+    action.goalId = input.goalId
+    action.projectId = input.projectId
+    action.updatedAt = now.toISOString()
     return this.clone(action)
   }
   async mutateTodayAction(planId, actionId, expectedActionStatuses, expectedPlanItemStatuses, actionStatus, planItemStatus, activityTypes) {
@@ -761,6 +813,122 @@ test('captures a valid standalone action, refreshes Today, and creates no activi
   assert.equal(repository.plans.length, 1)
   assert.equal(repository.activities.length, 0)
   assert.equal('userId' in repository.captureInputs[0], false)
+})
+
+test('creates active goals and both associated and standalone projects through the structured-work service boundary', async () => {
+  const repository = new MemoryRyqenRepository([])
+  const service = new TodayService(repository)
+
+  const afterGoal = await service.createGoal(userId, { title: '  Ship Ryqen  ', importance: 5 }, now)
+  const goal = repository.data.goals[0]
+  assert.equal(goal.title, 'Ship Ryqen')
+  assert.equal(goal.status, 'active')
+  assert.equal(afterGoal.goals[0].id, goal.id)
+
+  await service.createProject(userId, { title: 'Today launch', goalId: goal.id, importance: 5 }, now)
+  await service.createProject(userId, { title: 'Personal admin', goalId: null }, now)
+
+  assert.deepEqual(repository.data.projects.map((project) => ({ title: project.title, goalId: project.goalId, status: project.status })), [
+    { title: 'Today launch', goalId: goal.id, status: 'active' },
+    { title: 'Personal admin', goalId: null, status: 'active' },
+  ])
+  assert.equal(repository.planningLoads, 3)
+  assert.equal(repository.activeGoalLookups, 1)
+})
+
+test('captures actions as standalone or directly linked to an active goal or project without creating activity', async () => {
+  const repository = new MemoryRyqenRepository([])
+  repository.data.goals.push({
+    id: 'goal-1', userId, title: 'Launch', description: null, status: 'active', importance: 5, targetDate: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  })
+  repository.data.projects.push({
+    id: 'project-1', userId, goalId: 'goal-1', title: 'Release', description: null, status: 'active', importance: 4, targetDate: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  })
+  const service = new TodayService(repository)
+
+  await service.captureAction(userId, { title: 'Standalone', dueTiming: 'none', importance: 'normal', effort: '15' }, now)
+  const withGoal = await service.captureAction(userId, { title: 'Goal action', dueTiming: 'none', importance: 'normal', effort: '15', parentGoalId: 'goal-1' }, now)
+  const withProject = await service.captureAction(userId, { title: 'Project action', dueTiming: 'none', importance: 'normal', effort: '15', parentProjectId: 'project-1' }, now)
+
+  assert.deepEqual(repository.data.actions.map((action) => ({ title: action.title, goalId: action.goalId, projectId: action.projectId })), [
+    { title: 'Standalone', goalId: null, projectId: null },
+    { title: 'Goal action', goalId: 'goal-1', projectId: null },
+    { title: 'Project action', goalId: null, projectId: 'project-1' },
+  ])
+  const goalPriority = withGoal.state.priorities.find((priority) => priority.action.title === 'Goal action')
+  const projectPriority = withProject.state.priorities.find((priority) => priority.action.title === 'Project action')
+  assert.equal(goalPriority?.goal?.title, 'Launch')
+  assert.equal(projectPriority?.project?.title, 'Release')
+  assert.equal(projectPriority?.goal?.title, 'Launch')
+  assert.deepEqual(repository.activities, [])
+  assert.equal(repository.planningLoads, 3)
+  assert.equal(repository.activeGoalLookups, 1)
+  assert.equal(repository.activeProjectLookups, 1)
+})
+
+test('rejects inactive or cross-user capture parents before creating an Action', async () => {
+  const repository = new MemoryRyqenRepository([])
+  repository.data.goals.push(
+    {
+      id: 'paused-goal', userId, title: 'Paused', description: null, status: 'paused', importance: 3, targetDate: null,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    },
+    {
+      id: 'other-goal', userId: 'user-2', title: 'Other user', description: null, status: 'active', importance: 3, targetDate: null,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    },
+  )
+  const service = new TodayService(repository)
+
+  await assert.rejects(() => service.captureAction(userId, {
+    title: 'Paused parent', dueTiming: 'none', importance: 'normal', effort: '15', parentGoalId: 'paused-goal',
+  }, now), /active goal/)
+  await assert.rejects(() => service.captureAction(userId, {
+    title: 'Other parent', dueTiming: 'none', importance: 'normal', effort: '15', parentGoalId: 'other-goal',
+  }, now), /active goal/)
+
+  assert.equal(repository.captureInputs.length, 0)
+  assert.equal(repository.data.actions.length, 0)
+})
+
+test('preserves a captured standalone Action when the optional parent attachment fails', async () => {
+  const repository = new MemoryRyqenRepository([])
+  repository.data.goals.push({
+    id: 'goal-1', userId, title: 'Launch', description: null, status: 'active', importance: 3, targetDate: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  })
+  repository.actionParentUpdateError = new Error('Attach action parent: network failure')
+  const service = new TodayService(repository)
+
+  await assert.rejects(() => service.captureAction(userId, {
+    title: 'Keep this work', dueTiming: 'none', importance: 'normal', effort: '15', parentGoalId: 'goal-1',
+  }, now), /Attach action parent/)
+
+  assert.equal(repository.data.actions.length, 1)
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(repository.data.actions[0].goalId, null)
+  assert.deepEqual((await service.planToday(userId, now)).priorities.map((priority) => priority.action.title), ['Keep this work'])
+})
+
+test('an inactive parent excludes its captured action until reactivation without changing the Action lifecycle', async () => {
+  const repository = new MemoryRyqenRepository([])
+  repository.data.goals.push({
+    id: 'goal-1', userId, title: 'Launch', description: null, status: 'active', importance: 3, targetDate: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  })
+  const service = new TodayService(repository)
+  const captured = await service.captureAction(userId, { title: 'Linked action', dueTiming: 'none', importance: 'normal', effort: '15', parentGoalId: 'goal-1' }, now)
+  const actionId = captured.capturedActionId
+
+  const paused = await service.updateGoal(userId, 'goal-1', { status: 'paused' }, now)
+  assert.equal(repository.data.actions.find((action) => action.id === actionId)?.status, 'pending')
+  assert.equal(paused.priorities.some((priority) => priority.action.id === actionId), false)
+
+  const restored = await service.updateGoal(userId, 'goal-1', { status: 'active' }, now)
+  assert.equal(restored.priorities.some((priority) => priority.action.id === actionId), true)
+  assert.deepEqual(repository.activities, [])
 })
 
 test('a newly initialized user can begin with an empty Today and receive a planned action through capture', async () => {

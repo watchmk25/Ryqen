@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker'
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import { DailySummaryRow, EditModal, PickerColumn } from '../components'
+import { DailySummaryRow, EditModal, PickerColumn, StructuredWorkPlanSheet } from '../components'
 import { C, RANK_COLORS, T } from '../constants'
-import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatActionDueTiming, formatElapsedTime, formatEstimatedEffort, initialCustomDueDate, localDateForCapture, MAX_CAPTURE_ESTIMATED_MINUTES, shouldConfirmOldDueDate, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type PlanItem, type PriorityAction, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
+import { availableTimeMinutesForTodayPreset, DEFAULT_CAPTURE_EFFORT, formatActionDueTiming, formatElapsedTime, formatEstimatedEffort, initialCustomDueDate, localDateForCapture, MAX_CAPTURE_ESTIMATED_MINUTES, shouldConfirmOldDueDate, type CaptureDueTiming, type CaptureEffort, type CaptureImportance, type Goal, type PlanItem, type PriorityAction, type Project, type TodayCapacity, type TodayEmptyState, type TodayTimePreset, type WorkCaptureInput } from '../domain'
 import { useTodayPlan } from '../hooks/useTodayPlan'
 import { getOldDateWarningEnabled, setOldDateWarningEnabled } from '../utils/oldDateWarningPreference'
 
@@ -40,6 +40,10 @@ type WorkCaptureCardProps = {
   importance: CaptureImportance
   effort: CaptureEffort
   customEstimatedMinutes: string
+  activeGoals: Goal[]
+  activeProjects: Project[]
+  parentKind: 'none' | 'goal' | 'project'
+  parentId: string | null
   submitting: boolean
   unavailable: boolean
   onChangeTitle: (title: string) => void
@@ -52,6 +56,8 @@ type WorkCaptureCardProps = {
   onChangeImportance: (importance: CaptureImportance) => void
   onChangeEffort: (effort: CaptureEffort) => void
   onChangeCustomEstimatedMinutes: (minutes: string) => void
+  onChangeParentKind: (kind: 'none' | 'goal' | 'project') => void
+  onChangeParentId: (id: string | null) => void
   onSubmit: () => void
   onCancel: () => void
 }
@@ -134,14 +140,15 @@ function ElapsedTime({ action }: { action: PriorityAction['action'] }) {
 }
 
 function WorkCaptureCard({
-  title, dueTiming, customDueDate, showDatePicker, customTimeEnabled, customDueHour, customDueMinute, importance, effort, customEstimatedMinutes, submitting, unavailable,
-  onChangeTitle, onChangeDueTiming, onOpenDatePicker, onDatePickerChange, onChangeCustomTimeEnabled, onChangeCustomDueHour, onChangeCustomDueMinute, onChangeImportance, onChangeEffort, onChangeCustomEstimatedMinutes, onSubmit, onCancel,
+  title, dueTiming, customDueDate, showDatePicker, customTimeEnabled, customDueHour, customDueMinute, importance, effort, customEstimatedMinutes, activeGoals, activeProjects, parentKind, parentId, submitting, unavailable,
+  onChangeTitle, onChangeDueTiming, onOpenDatePicker, onDatePickerChange, onChangeCustomTimeEnabled, onChangeCustomDueHour, onChangeCustomDueMinute, onChangeImportance, onChangeEffort, onChangeCustomEstimatedMinutes, onChangeParentKind, onChangeParentId, onSubmit, onCancel,
 }: WorkCaptureCardProps) {
   const customMinutes = Number(customEstimatedMinutes)
   const customEffortIsValid = effort !== 'custom'
     || (Number.isInteger(customMinutes) && customMinutes >= 1 && customMinutes <= MAX_CAPTURE_ESTIMATED_MINUTES)
   const customDateIsValid = /^\d{4}-\d{2}-\d{2}$/.test(customDueDate)
-  const canSubmit = title.trim().length > 0 && customEffortIsValid && (dueTiming !== 'custom' || customDateIsValid) && !submitting && !unavailable
+  const hasSelectedParent = parentKind === 'none' || parentId !== null
+  const canSubmit = title.trim().length > 0 && customEffortIsValid && (dueTiming !== 'custom' || customDateIsValid) && hasSelectedParent && !submitting && !unavailable
   const dueSummary = dueTiming === 'today'
     ? 'Due today'
     : dueTiming === 'tomorrow'
@@ -222,6 +229,36 @@ function WorkCaptureCard({
           </View>
         )}
         <Text style={[T.caption1, { color: C.t2 }]}>{dueSummary}</Text>
+      </View>
+      <View style={{ gap: 6 }}>
+        <Text style={[T.caption1, { fontWeight: '700' }]}>CONTEXT (OPTIONAL)</Text>
+        <View style={{ flexDirection: 'row', gap: 6 }}>
+          {([
+            { label: 'Standalone', value: 'none' },
+            { label: 'Goal', value: 'goal' },
+            { label: 'Project', value: 'project' },
+          ] as const).map((option) => {
+            const selected = parentKind === option.value
+            return (
+              <TouchableOpacity key={option.value} disabled={unavailable} onPress={() => onChangeParentKind(option.value)} style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7 }}>
+                <Text style={{ color: selected ? C.accent : C.t2, fontSize: 11, fontWeight: '700' }}>{option.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+        {parentKind !== 'none' && (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {(parentKind === 'goal' ? activeGoals : activeProjects).map((parent) => {
+              const selected = parentId === parent.id
+              return (
+                <TouchableOpacity key={parent.id} disabled={unavailable} onPress={() => onChangeParentId(parent.id)} style={{ backgroundColor: selected ? C.accentDim : C.surface2, borderColor: selected ? C.accent : 'transparent', borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7 }}>
+                  <Text numberOfLines={1} style={{ color: selected ? C.accent : C.t2, fontSize: 11, fontWeight: '700', maxWidth: 180 }}>{parent.title}</Text>
+                </TouchableOpacity>
+              )
+            })}
+            {(parentKind === 'goal' ? activeGoals : activeProjects).length === 0 && <Text style={T.caption1}>No active {parentKind}s yet.</Text>}
+          </View>
+        )}
       </View>
       <View style={{ gap: 6 }}>
         <Text style={[T.caption1, { fontWeight: '700' }]}>IMPORTANCE</Text>
@@ -382,6 +419,12 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
             <Text style={{ color: C.t2, fontSize: 12, lineHeight: 15 }}>{formatEstimatedEffort(priority.estimatedMinutes)}</Text>
             {dueTiming && <Text style={{ color: dueTiming.startsWith('Overdue') ? C.danger : C.t2, fontSize: 12, lineHeight: 15 }}>{dueTiming}</Text>}
           </View>
+          {(priority.project || priority.goal) && (
+            <Text numberOfLines={1} style={{ color: C.t2, fontSize: 11, lineHeight: 15 }}>
+              {priority.project ? `Project: ${priority.project.title}` : `Goal: ${priority.goal?.title}`}
+              {priority.project && priority.goal ? ` · Goal: ${priority.goal.title}` : ''}
+            </Text>
+          )}
         </View>
         {isInProgress && (
           <View style={{ alignItems: 'flex-end', gap: 2 }}>
@@ -439,6 +482,7 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
 export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabProps) {
   const [showDeferred, setShowDeferred] = useState(false)
   const [showCapture, setShowCapture] = useState(false)
+  const [showPlan, setShowPlan] = useState(false)
   const [captureTitle, setCaptureTitle] = useState('')
   const [captureDueTiming, setCaptureDueTiming] = useState<CaptureDueTiming>('none')
   const [customDueDate, setCustomDueDate] = useState('')
@@ -450,6 +494,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const [captureImportance, setCaptureImportance] = useState<CaptureImportance>('normal')
   const [captureEffort, setCaptureEffort] = useState<CaptureEffort>(DEFAULT_CAPTURE_EFFORT)
   const [customEstimatedMinutes, setCustomEstimatedMinutes] = useState('')
+  const [captureParentKind, setCaptureParentKind] = useState<'none' | 'goal' | 'project'>('none')
+  const [captureParentId, setCaptureParentId] = useState<string | null>(null)
   const [showTodayCheckIn, setShowTodayCheckIn] = useState(false)
   const [todayTimePreset, setTodayTimePreset] = useState<TodayTimePreset>('30')
   const [todayCapacity, setTodayCapacity] = useState<TodayCapacity | null>(null)
@@ -460,6 +506,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     pendingOperation,
     capturing,
     checkingIn,
+    organizing,
     error,
     acknowledgement,
     isTodayUnavailable,
@@ -474,12 +521,16 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     reconsiderDeferredAction,
     captureAction,
     applyTodayCheckIn,
+    createGoal,
+    createProject,
   } = useTodayPlan(userId)
 
   const deferredItems = state?.deferredWork ?? []
   const pausedItems = state?.pausedWork ?? []
   const completedCount = state?.planItems.filter((item) => item.status === 'completed').length ?? 0
   const rankColor = RANK_COLORS[rank] ?? C.accent
+  const activeGoals = state?.goals.filter((goal) => goal.status === 'active') ?? []
+  const activeProjects = state?.projects.filter((project) => project.status === 'active') ?? []
 
   useEffect(() => {
     let current = true
@@ -501,6 +552,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
       importance: captureImportance,
       effort: captureEffort,
       customEstimatedMinutes: captureEffort === 'custom' ? Number(customEstimatedMinutes) : undefined,
+      parentGoalId: captureParentKind === 'goal' ? captureParentId : null,
+      parentProjectId: captureParentKind === 'project' ? captureParentId : null,
     } satisfies WorkCaptureInput)
     if (!created) return
 
@@ -514,6 +567,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     setCaptureImportance('normal')
     setCaptureEffort(DEFAULT_CAPTURE_EFFORT)
     setCustomEstimatedMinutes('')
+    setCaptureParentKind('none')
+    setCaptureParentId(null)
     setShowCapture(false)
   }
 
@@ -573,6 +628,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     setCaptureImportance('normal')
     setCaptureEffort(DEFAULT_CAPTURE_EFFORT)
     setCustomEstimatedMinutes('')
+    setCaptureParentKind('none')
+    setCaptureParentId(null)
     setShowCapture(false)
   }
 
@@ -620,6 +677,9 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               <TouchableOpacity disabled={isTodayUnavailable || checkingIn} onPress={openTodayCheckIn} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
                 <Text style={{ color: isTodayUnavailable ? C.t3 : C.accent, fontSize: 12, fontWeight: '800' }}>Adjust today</Text>
               </TouchableOpacity>
+              <TouchableOpacity disabled={isTodayUnavailable || organizing} onPress={() => setShowPlan(true)} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
+                <Text style={{ color: isTodayUnavailable ? C.t3 : C.accent, fontSize: 12, fontWeight: '800' }}>Plan</Text>
+              </TouchableOpacity>
               {!showCapture && (
                 <TouchableOpacity disabled={isTodayUnavailable} onPress={() => setShowCapture(true)} style={{ backgroundColor: isTodayUnavailable ? C.surface2 : C.accentDim, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }}>
                   <Text style={{ color: isTodayUnavailable ? C.t3 : C.accent, fontSize: 12, fontWeight: '800' }}>+ Add</Text>
@@ -643,6 +703,10 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           importance={captureImportance}
           effort={captureEffort}
           customEstimatedMinutes={customEstimatedMinutes}
+          activeGoals={activeGoals}
+          activeProjects={activeProjects}
+          parentKind={captureParentKind}
+          parentId={captureParentId}
           submitting={capturing}
           unavailable={isTodayUnavailable}
           onChangeTitle={setCaptureTitle}
@@ -655,6 +719,8 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
           onChangeImportance={setCaptureImportance}
           onChangeEffort={setCaptureEffort}
           onChangeCustomEstimatedMinutes={setCustomEstimatedMinutes}
+          onChangeParentKind={(kind) => { setCaptureParentKind(kind); setCaptureParentId(null) }}
+          onChangeParentId={setCaptureParentId}
           onSubmit={requestCapture}
           onCancel={closeCapture}
         />
@@ -672,6 +738,17 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         onClose={closeTodayCheckIn}
       />
 
+      <StructuredWorkPlanSheet
+        visible={showPlan}
+        goals={state?.goals ?? []}
+        projects={state?.projects ?? []}
+        saving={organizing}
+        unavailable={isTodayUnavailable}
+        onClose={() => { if (!organizing) setShowPlan(false) }}
+        onCreateGoal={createGoal}
+        onCreateProject={createProject}
+      />
+
       {loading && (
         <View style={{ paddingVertical: 48, alignItems: 'center', gap: 12 }}>
           <ActivityIndicator color={C.accent} size="large" />
@@ -682,7 +759,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
       {!loading && error && (
         <View style={{ marginHorizontal: 20, marginBottom: 16, backgroundColor: C.danger + '16', borderRadius: 16, padding: 16, gap: 10 }}>
           <View>
-            <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>{error.source === 'mutation' ? "Couldn't update this action" : error.source === 'compatibility' ? 'Backend update needed' : 'Today is unavailable'}</Text>
+            <Text style={[T.subhead, { color: C.danger, fontWeight: '700' }]}>{error.source === 'mutation' ? error.operation === 'structured_work' ? "Couldn't update your plan" : "Couldn't update this action" : error.source === 'compatibility' ? 'Backend update needed' : 'Today is unavailable'}</Text>
             <Text style={[T.caption1, { marginTop: 4 }]}>{error.message}</Text>
             {isTodayUnavailable && <Text style={[T.caption1, { marginTop: 4 }]}>Your displayed plan may be out of date. Refresh Today to continue.</Text>}
           </View>

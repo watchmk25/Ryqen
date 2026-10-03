@@ -18,6 +18,14 @@ test('a successful mutation clears a previous mutation failure', () => {
   assert.equal(clearedForNewOperation, null)
 })
 
+test('keeps structured-work failures distinct from lifecycle action failures', () => {
+  const error = transitionTodayError(null, { type: 'mutation_failed', operation: 'structured_work' })
+
+  assert.equal(error?.source, 'mutation')
+  assert.equal(error?.operation, 'structured_work')
+  assert.match(error?.message ?? '', /update your plan/)
+})
+
 test('retry clears a mutation error on success and replaces it when refresh fails', () => {
   const mutationError = transitionTodayError(null, { type: 'mutation_failed', operation: 'defer' })
   const retryStarted = transitionTodayError(mutationError, { type: 'clear' })
