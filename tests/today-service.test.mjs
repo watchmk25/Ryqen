@@ -8,7 +8,7 @@ const userId = 'user-1'
 function createAction(id, overrides = {}) {
   return {
     id, userId, taskId: null, projectId: null, goalId: null, title: id, description: null,
-    status: 'pending', importance: 3, estimatedMinutes: 15, dueDate: null, dueTime: null, dueAt: null, accumulatedActiveSeconds: 0, startedAt: null,
+    status: 'pending', importance: 3, estimatedMinutes: 15, dueDate: null, dueTime: null, dueAt: null, accumulatedActiveSeconds: 0, startedAt: null, cancelledAt: null,
     createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', ...overrides,
   }
 }
@@ -21,7 +21,7 @@ class MemoryRyqenRepository {
     this.activities = []
     this.captureInputs = []
     this.sequence = 0
-    this.todayBackendContractVersion = 4
+    this.todayBackendContractVersion = 5
     this.todayBackendContractError = null
     this.todayBackendContractChecks = 0
     this.planningLoads = 0
@@ -34,6 +34,8 @@ class MemoryRyqenRepository {
     this.deferRpcCalls = 0
     this.reconsiderRpcCalls = 0
     this.skipRpcCalls = 0
+    this.cancelRpcCalls = 0
+    this.restoreRpcCalls = 0
     this.lifecyclePlanItemLookups = 0
     this.currentTime = new Date(now)
   }
@@ -80,6 +82,15 @@ class MemoryRyqenRepository {
     this.activeGoalLookups += 1
     const goal = this.data.goals.find((item) => item.id === goalId && item.userId === ownerId && item.status === 'active') ?? null
     return this.clone(goal)
+  }
+  async findAction(ownerId, actionId) {
+    return this.clone(this.data.actions.find((item) => item.id === actionId && item.userId === ownerId) ?? null)
+  }
+  async listRecentCancelledActions(ownerId, since, limit) {
+    return this.clone(this.data.actions
+      .filter((item) => item.userId === ownerId && item.status === 'cancelled' && item.cancelledAt && item.cancelledAt >= since)
+      .sort((left, right) => right.cancelledAt.localeCompare(left.cancelledAt) || right.id.localeCompare(left.id))
+      .slice(0, limit))
   }
   async findActiveProject(ownerId, projectId) {
     this.activeProjectLookups += 1
@@ -134,7 +145,7 @@ class MemoryRyqenRepository {
       const existing = this.planItems.find((candidate) => candidate.dailyPlanId === plan.id && candidate.actionId === item.actionId)
       if (!existing) {
         this.planItems.push({ id: this.nextId('item'), dailyPlanId: plan.id, ...item, status: 'pending', createdAt: now.toISOString() })
-      } else if (existing.status === 'pending' || existing.status === 'replaced') {
+      } else if (existing.status === 'pending' || existing.status === 'replaced' || existing.status === 'cancelled') {
         Object.assign(existing, item, { status: 'pending' })
       }
     }
@@ -192,6 +203,12 @@ class MemoryRyqenRepository {
     action.goalId = input.goalId
     action.projectId = input.projectId
     action.updatedAt = now.toISOString()
+    return this.clone(action)
+  }
+  async updateAction(id, input) {
+    const action = this.data.actions.find((item) => item.id === id)
+    if (!action) throw new Error('Action not found')
+    Object.assign(action, input, { updatedAt: this.currentTime.toISOString() })
     return this.clone(action)
   }
   async mutateTodayAction(planId, actionId, expectedActionStatuses, expectedPlanItemStatuses, actionStatus, planItemStatus, activityTypes) {
@@ -258,6 +275,31 @@ class MemoryRyqenRepository {
   async reconsiderTodayAction(planId, actionId) {
     this.reconsiderRpcCalls += 1
     return this.mutateTodayAction(planId, actionId, ['deferred'], ['deferred'], 'pending', 'pending', [])
+  }
+  async cancelAction(actionId, planId) {
+    this.cancelRpcCalls += 1
+    const action = this.data.actions.find((item) => item.id === actionId)
+    if (!action || !['pending', 'in_progress', 'paused', 'deferred'].includes(action.status)) throw new Error('Invalid cancel')
+    const planItem = planId ? this.planItems.find((item) => item.dailyPlanId === planId && item.actionId === actionId) : null
+    if (planId && (!planItem || planItem.status !== action.status)) throw new Error('Invalid cancel anchor')
+    if (!planId && action.status !== 'pending') throw new Error('Missing cancel anchor')
+    if (action.status === 'in_progress') this.flushActiveSession(action)
+    action.status = 'cancelled'
+    action.cancelledAt = this.currentTime.toISOString()
+    action.startedAt = null
+    if (planItem) planItem.status = 'cancelled'
+    this.recordActivity(action, planItem ?? { id: null }, 'action_cancelled')
+    return this.clone({ action, planItem })
+  }
+  async restoreCancelledAction(actionId) {
+    this.restoreRpcCalls += 1
+    const action = this.data.actions.find((item) => item.id === actionId)
+    if (!action || action.status !== 'cancelled' || !action.cancelledAt) throw new Error('Invalid restore')
+    if (this.currentTime.getTime() > new Date(action.cancelledAt).getTime() + 30 * 86400000) throw new Error('Cancelled action restore window has expired')
+    action.status = 'pending'
+    action.cancelledAt = null
+    this.recordActivity(action, { id: null }, 'action_restored')
+    return this.clone(action)
   }
 }
 
@@ -1211,6 +1253,89 @@ test('a skipped yesterday plan item leaves persistent pending work eligible for 
   assert.equal(repository.data.actions[0].status, 'pending')
   assert.equal(repository.planItems.find((item) => item.dailyPlanId === repository.plans[0].id)?.status, 'skipped')
   assert.deepEqual(today.priorities.map((priority) => priority.action.id), ['skipped-action'])
+})
+
+test('cancels pending and active Actions through the authoritative lifecycle path without losing parents or active time', async () => {
+  const repository = new MemoryRyqenRepository([
+    createAction('pending', { goalId: 'goal-1' }),
+    createAction('active', { projectId: 'project-1' }),
+  ])
+  repository.data.goals.push({ id: 'goal-1', userId, title: 'Goal', description: null, status: 'active', importance: 3, targetDate: null, createdAt: now.toISOString(), updatedAt: now.toISOString() })
+  repository.data.projects.push({ id: 'project-1', userId, goalId: null, title: 'Project', description: null, status: 'active', importance: 3, targetDate: null, createdAt: now.toISOString(), updatedAt: now.toISOString() })
+  const service = new TodayService(repository)
+  let state = await service.planToday(userId, now)
+  state = await service.cancelAction(state, 'pending')
+  assert.equal(repository.data.actions.find((action) => action.id === 'pending').status, 'cancelled')
+  assert.equal(repository.data.actions.find((action) => action.id === 'pending').goalId, 'goal-1')
+  assert.equal(state.priorities.some((priority) => priority.action.id === 'pending'), false)
+  assert.deepEqual(state.recentCancelledWork.map((work) => work.action.id), ['pending'])
+
+  state = await service.startAction(await service.planToday(userId, now), 'active')
+  repository.advanceSeconds(90)
+  state = await service.cancelAction(state, 'active')
+  const active = repository.data.actions.find((action) => action.id === 'active')
+  assert.equal(active.status, 'cancelled')
+  assert.equal(active.projectId, 'project-1')
+  assert.equal(active.startedAt, null)
+  assert.equal(active.accumulatedActiveSeconds, 90)
+  assert.equal(repository.planItems.find((item) => item.actionId === 'active').status, 'cancelled')
+  assert.deepEqual(repository.activities.filter((activity) => activity.type === 'action_cancelled').map((activity) => activity.actionId).sort(), ['active', 'pending'])
+  await assert.rejects(() => service.cancelAction(state, 'active'), /cannot be cancelled/)
+})
+
+test('cancels paused and deferred Actions through their existing lifecycle anchors', async () => {
+  const repository = new MemoryRyqenRepository([createAction('paused'), createAction('deferred')])
+  const service = new TodayService(repository)
+  let state = await service.planToday(userId, now)
+
+  state = await service.startAction(state, 'paused')
+  state = await service.pauseAction(state, 'paused')
+  state = await service.cancelAction(state, 'paused')
+  assert.equal(repository.data.actions.find((action) => action.id === 'paused').status, 'cancelled')
+  assert.equal(repository.planItems.find((item) => item.actionId === 'paused').status, 'cancelled')
+
+  state = await service.planToday(userId, now)
+  state = await service.deferAction(state, 'deferred')
+  state = await service.cancelAction(state, 'deferred')
+  assert.equal(repository.data.actions.find((action) => action.id === 'deferred').status, 'cancelled')
+  assert.equal(repository.planItems.find((item) => item.actionId === 'deferred').status, 'cancelled')
+  assert.deepEqual(state.deferredWork, [])
+})
+
+test('restores a recent cancelled Action to pending, while expired cancellation remains retained but cannot restore', async () => {
+  const repository = new MemoryRyqenRepository([createAction('recover'), createAction('expired')])
+  const service = new TodayService(repository)
+  let state = await service.planToday(userId, now)
+  state = await service.cancelAction(state, 'recover')
+  const restored = await service.restoreCancelledAction(state, 'recover')
+  assert.equal(repository.data.actions.find((action) => action.id === 'recover').status, 'pending')
+  assert.equal(repository.data.actions.find((action) => action.id === 'recover').cancelledAt, null)
+  assert.deepEqual(restored.recentCancelledWork, [])
+  assert.deepEqual((await service.planToday(userId, now)).priorities.map((priority) => priority.action.id), ['recover', 'expired'])
+
+  state = await service.cancelAction(await service.planToday(userId, now), 'expired')
+  repository.advanceSeconds(31 * 86400)
+  await assert.rejects(() => service.restoreCancelledAction(state, 'expired'), /restore window has expired/)
+  assert.equal(repository.data.actions.find((action) => action.id === 'expired').status, 'cancelled')
+})
+
+test('inactive-parent pending work remains discoverable and can be detached without mutating lifecycle', async () => {
+  const repository = new MemoryRyqenRepository([createAction('orphan', { goalId: 'paused-goal' })])
+  repository.data.goals.push({ id: 'paused-goal', userId, title: 'Paused goal', description: null, status: 'paused', importance: 3, targetDate: null, createdAt: now.toISOString(), updatedAt: now.toISOString() })
+  const service = new TodayService(repository)
+  const unavailable = await service.planToday(userId, now)
+  assert.deepEqual(unavailable.priorities, [])
+  assert.deepEqual(unavailable.inactiveParentWork.map((work) => work.action.id), ['orphan'])
+  const recovered = await service.updateAction(userId, 'orphan', { title: 'Detached work', goalId: null, projectId: null }, now)
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(repository.data.actions[0].goalId, null)
+  assert.deepEqual(recovered.priorities.map((priority) => priority.action.id), ['orphan'])
+
+  repository.data.goals.push({ id: 'active-goal', userId, title: 'Active goal', description: null, status: 'active', importance: 3, targetDate: null, createdAt: now.toISOString(), updatedAt: now.toISOString() })
+  const reattached = await service.updateAction(userId, 'orphan', { title: 'Reassigned work', goalId: 'active-goal', projectId: null }, now)
+  assert.equal(repository.data.actions[0].status, 'pending')
+  assert.equal(repository.data.actions[0].goalId, 'active-goal')
+  assert.deepEqual(reattached.priorities.map((priority) => priority.action.id), ['orphan'])
 })
 
 test('cross-day lifecycle discovery is isolated to the authenticated user', async () => {

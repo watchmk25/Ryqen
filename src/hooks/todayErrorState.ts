@@ -1,4 +1,4 @@
-export type TodayMutationOperation = 'start' | 'pause' | 'resume' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'capture' | 'check_in' | 'structured_work'
+export type TodayMutationOperation = 'start' | 'pause' | 'resume' | 'complete' | 'defer' | 'skip' | 'reconsider' | 'cancel' | 'restore' | 'capture' | 'check_in' | 'structured_work'
 
 export interface TodayCommandError {
   source: 'mutation' | 'reload' | 'compatibility'
@@ -22,6 +22,8 @@ const mutationMessages: Record<TodayMutationOperation, string> = {
   defer: "Couldn't defer this action. Your plan was refreshed.",
   skip: "Couldn't skip this action. Your plan was refreshed.",
   reconsider: "Couldn't reconsider this action. Your plan was refreshed.",
+  cancel: "Couldn't cancel this action. Your plan was refreshed.",
+  restore: "Couldn't restore this action. Your plan was refreshed.",
   capture: "Couldn't add this work. Your plan was refreshed.",
   check_in: "Couldn't update today's availability. Your plan was refreshed.",
   structured_work: "Couldn't update your plan. Your workspace was refreshed.",

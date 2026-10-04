@@ -81,6 +81,10 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const pausedGoalAction = '30000000-0000-0000-0000-000000000010'
   const actionPause = '30000000-0000-0000-0000-000000000011'
   const actionNoTarget = '30000000-0000-0000-0000-000000000012'
+  const actionCancelPending = '30000000-0000-0000-0000-000000000013'
+  const actionCancelActive = '30000000-0000-0000-0000-000000000014'
+  const actionCancelledExpired = '30000000-0000-0000-0000-000000000015'
+  const actionCancelledB = '30000000-0000-0000-0000-000000000016'
   const blockedTask = '60000000-0000-0000-0000-000000000001'
   const pausedProject = '60000000-0000-0000-0000-000000000002'
   const pausedGoal = '60000000-0000-0000-0000-000000000003'
@@ -93,6 +97,8 @@ test('local Supabase lifecycle hardening enforces client boundaries and preserve
   const overnightItem = '40000000-0000-0000-0000-000000000007'
   const itemPause = '40000000-0000-0000-0000-000000000008'
   const itemNoTarget = '40000000-0000-0000-0000-000000000009'
+  const itemCancelPending = '40000000-0000-0000-0000-000000000010'
+  const itemCancelActive = '40000000-0000-0000-0000-000000000011'
   const otherActivity = '50000000-0000-0000-0000-000000000001'
 
   const output = runSql(`
@@ -129,7 +135,21 @@ VALUES
   ('${pausedProjectAction}', '${userA}', 'Paused project parent', 'pending', 3, 15),
   ('${pausedGoalAction}', '${userA}', 'Paused goal parent', 'pending', 3, 15),
   ('${actionPause}', '${userA}', 'Pause and resume', 'pending', 3, 15),
-  ('${actionNoTarget}', '${userA}', 'No timing target', 'pending', 3, 15);
+  ('${actionNoTarget}', '${userA}', 'No timing target', 'pending', 3, 15),
+  ('${actionCancelPending}', '${userA}', 'Cancel pending', 'pending', 3, 15),
+  ('${actionCancelActive}', '${userA}', 'Cancel active', 'in_progress', 3, 15),
+  ('${actionCancelledExpired}', '${userA}', 'Expired cancellation', 'cancelled', 3, 15),
+  ('${actionCancelledB}', '${userB}', 'Other user cancellation', 'cancelled', 3, 15);
+
+UPDATE public.actions
+SET started_at = now() - interval '120 seconds'
+WHERE id = '${actionCancelActive}';
+UPDATE public.actions
+SET cancelled_at = now() - interval '31 days'
+WHERE id = '${actionCancelledExpired}';
+UPDATE public.actions
+SET cancelled_at = now()
+WHERE id = '${actionCancelledB}';
 
 DO $$
 BEGIN
@@ -156,6 +176,8 @@ VALUES
   ('${itemReplace}', '${planA}', '${actionReplace}', 5, 1, 'Old recommendation', 15, 'pending'),
   ('${itemPause}', '${planA}', '${actionPause}', 6, 1, 'Pause lifecycle', 15, 'pending'),
   ('${itemNoTarget}', '${planA}', '${actionNoTarget}', 7, 1, 'No timing target', NULL, 'pending'),
+  ('${itemCancelPending}', '${planA}', '${actionCancelPending}', 8, 1, 'Cancel lifecycle', 15, 'pending'),
+  ('${itemCancelActive}', '${planA}', '${actionCancelActive}', 9, 1, 'Cancel lifecycle', 15, 'in_progress'),
   ('${overnightItem}', '${historicalPlan}', '${overnightAction}', 1, 1, 'Historical lifecycle anchor', 15, 'in_progress');
 
 INSERT INTO public.activities (id, user_id, action_id, type)
@@ -165,7 +187,7 @@ SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '${userA}', true);
 DO $$
 BEGIN
-  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 4 THEN
+  IF (public.ryqen_today_backend_contract() ->> 'contract_version')::integer <> 5 THEN
     RAISE EXCEPTION 'Today backend contract returned an unexpected version';
   END IF;
 END;
@@ -201,6 +223,11 @@ BEGIN
   BEGIN
     UPDATE public.actions SET accumulated_active_seconds = 1 WHERE id = '${actionA}';
     RAISE EXCEPTION 'direct Action accumulated timing UPDATE unexpectedly succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE public.actions SET cancelled_at = now() WHERE id = '${actionA}';
+    RAISE EXCEPTION 'direct Action cancellation timestamp UPDATE unexpectedly succeeded';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
   BEGIN
@@ -402,6 +429,62 @@ $$;
 SELECT public.ryqen_defer_today_action('${planA}', '${actionDefer}');
 SELECT public.ryqen_start_today_action('${planA}', '${actionPause}');
 SELECT public.ryqen_pause_today_action('${planA}', '${actionPause}');
+SELECT public.ryqen_cancel_action('${actionCancelPending}', '${planA}');
+DO $$
+BEGIN
+  IF (SELECT status FROM public.actions WHERE id = '${actionCancelPending}') <> 'cancelled'
+    OR (SELECT cancelled_at FROM public.actions WHERE id = '${actionCancelPending}') IS NULL
+    OR (SELECT status FROM public.plan_items WHERE id = '${itemCancelPending}') <> 'cancelled'
+    OR (SELECT count(*) FROM public.activities WHERE action_id = '${actionCancelPending}' AND type = 'action_cancelled') <> 1 THEN
+    RAISE EXCEPTION 'Cancel RPC did not atomically cancel pending work';
+  END IF;
+  BEGIN
+    PERFORM public.ryqen_cancel_action('${actionCancelPending}', '${planA}');
+    RAISE EXCEPTION 'repeat Cancel unexpectedly succeeded';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  IF (SELECT count(*) FROM public.activities WHERE action_id = '${actionCancelPending}' AND type = 'action_cancelled') <> 1 THEN
+    RAISE EXCEPTION 'repeat Cancel created duplicate activity';
+  END IF;
+END;
+$$;
+SELECT public.ryqen_restore_cancelled_action('${actionCancelPending}');
+DO $$
+BEGIN
+  IF (SELECT status FROM public.actions WHERE id = '${actionCancelPending}') <> 'pending'
+    OR (SELECT cancelled_at FROM public.actions WHERE id = '${actionCancelPending}') IS NOT NULL
+    OR (SELECT count(*) FROM public.activities WHERE action_id = '${actionCancelPending}' AND type = 'action_restored') <> 1 THEN
+    RAISE EXCEPTION 'Restore did not preserve the Action';
+  END IF;
+  BEGIN
+    PERFORM public.ryqen_restore_cancelled_action('${actionCancelledExpired}');
+    RAISE EXCEPTION 'expired cancelled Action was restored';
+  EXCEPTION WHEN raise_exception THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_cancel_action('${actionB}', '${planB}');
+    RAISE EXCEPTION 'cross-user Cancel unexpectedly succeeded';
+  EXCEPTION WHEN no_data_found THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.ryqen_restore_cancelled_action('${actionCancelledB}');
+    RAISE EXCEPTION 'cross-user Restore unexpectedly succeeded';
+  EXCEPTION WHEN no_data_found THEN NULL;
+  END;
+END;
+$$;
+SELECT public.ryqen_cancel_action('${actionCancelActive}', '${planA}');
+DO $$
+BEGIN
+  IF (SELECT status FROM public.actions WHERE id = '${actionCancelActive}') <> 'cancelled'
+    OR (SELECT started_at FROM public.actions WHERE id = '${actionCancelActive}') IS NOT NULL
+    OR (SELECT accumulated_active_seconds FROM public.actions WHERE id = '${actionCancelActive}') < 60
+    OR (SELECT status FROM public.plan_items WHERE id = '${itemCancelActive}') <> 'cancelled'
+    OR (SELECT count(*) FROM public.activities WHERE action_id = '${actionCancelActive}' AND type = 'action_cancelled') <> 1 THEN
+    RAISE EXCEPTION 'Cancel did not flush active time atomically';
+  END IF;
+END;
+$$;
 DO $$
 BEGIN
   BEGIN
@@ -527,6 +610,17 @@ BEGIN
   END IF;
 END;
 $$;
+SELECT public.ryqen_reconcile_today_plan(
+  '${planA}', current_date,
+  jsonb_build_array(jsonb_build_object('action_id', '${actionCancelPending}', 'position', 1, 'priority_score', 9, 'rationale', 'Restored cancellation', 'estimated_minutes', 15))
+);
+DO $$
+BEGIN
+  IF (SELECT status FROM public.plan_items WHERE id = '${itemCancelPending}') <> 'pending' THEN
+    RAISE EXCEPTION 'Restore did not reconcile its valid cancelled snapshot back to pending';
+  END IF;
+END;
+$$;
 
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', true);
@@ -573,6 +667,8 @@ BEGIN
     'public.ryqen_defer_today_action(uuid,uuid)'::regprocedure,
     'public.ryqen_skip_today_plan_item(uuid,uuid)'::regprocedure,
     'public.ryqen_reconsider_today_action(uuid,uuid)'::regprocedure,
+    'public.ryqen_cancel_action(uuid,uuid)'::regprocedure,
+    'public.ryqen_restore_cancelled_action(uuid)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,timestamp with time zone)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,timestamp with time zone,integer)'::regprocedure,
     'public.ryqen_capture_action(text,smallint,date,time without time zone,integer)'::regprocedure,
@@ -591,6 +687,7 @@ BEGIN
     OR has_column_privilege('authenticated', 'public.actions', 'status', 'UPDATE')
     OR has_column_privilege('authenticated', 'public.actions', 'started_at', 'UPDATE')
     OR has_column_privilege('authenticated', 'public.actions', 'accumulated_active_seconds', 'UPDATE')
+    OR has_column_privilege('authenticated', 'public.actions', 'cancelled_at', 'UPDATE')
     OR has_column_privilege('authenticated', 'public.actions', 'user_id', 'UPDATE')
     OR has_table_privilege('authenticated', 'public.plan_items', 'INSERT')
     OR has_table_privilege('authenticated', 'public.plan_items', 'UPDATE')

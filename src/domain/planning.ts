@@ -150,6 +150,27 @@ function resolveActionParents(action: Action, data: PlanningData): { task: Task 
   return { task, project, goal }
 }
 
+/**
+ * Recovery-only diagnostic. It identifies pending Actions excluded because a
+ * Goal/Project relationship is inactive or missing, without changing normal
+ * planner eligibility or Action lifecycle.
+ */
+export function hasInactiveActionParent(action: Action, data: PlanningData): boolean {
+  if (action.status !== 'pending') return false
+  const task = action.taskId ? data.tasks.find((item) => item.id === action.taskId) ?? null : null
+  const projectIds = [action.projectId, task?.projectId].filter((id): id is string => id !== null && id !== undefined)
+  const projects = projectIds.map((id) => data.projects.find((project) => project.id === id) ?? null)
+  const goalIds = [
+    action.goalId,
+    task?.goalId,
+    ...projects.map((project) => project?.goalId ?? null),
+  ].filter((id): id is string => id !== null && id !== undefined)
+  const goals = goalIds.map((id) => data.goals.find((goal) => goal.id === id) ?? null)
+
+  return projects.some((project) => !project || project.status !== 'active')
+    || goals.some((goal) => !goal || goal.status !== 'active')
+}
+
 export function calculatePriority(action: Action, data: PlanningData, planningContext: PlanningContext, now = new Date()): PriorityAction | null {
   if (action.status !== 'pending' && action.status !== 'in_progress') return null
   if (planningContext.blockedActionIds.includes(action.id)) return null

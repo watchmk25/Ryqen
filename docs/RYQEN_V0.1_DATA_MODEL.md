@@ -254,6 +254,11 @@ An Action can belong to a Task, Project, Goal, or none of them.
 
 Standalone Actions are explicitly supported.
 
+The implemented Action model also includes `cancelled_at timestamptz NULL`.
+It is server-authored when a persistent Action is cancelled, cleared only by a
+valid explicit Restore, and is the authoritative 30-day restore-window
+boundary. Cancellation never deletes the Action or its parent relationships.
+
 The implemented Action timing fields are `started_at` and
 `accumulated_active_seconds`. `started_at` marks only the current open active
 session; `accumulated_active_seconds` durably stores prior closed sessions.
@@ -348,6 +353,12 @@ A Plan Item stores the planning result, including:
 - current plan-item status
 
 Recommended status values can initially mirror the plan lifecycle needed by the UI, without creating a complex workflow.
+
+Implemented lifecycle snapshots additionally distinguish `paused`,
+`deferred`, `skipped`, `cancelled`, and planner-owned `replaced`. A cancelled
+Plan Item is an audit/lifecycle anchor, not a current recommendation; same-day
+reconciliation may return it to `pending` only after the protected Restore has
+already returned its Action to `pending`.
 
 ---
 

@@ -113,6 +113,10 @@ pending Actions again without copying or rewriting yesterday's plan.
 - Deferred Actions remain secondary and `deferred` across days. They are only
   made pending again when the user explicitly chooses Reconsider; Ryqen does
   not reactivate them automatically.
+- Cancelled Actions remain persistent but are neither Active Work nor fresh
+  recommendations. Today exposes at most ten recently cancelled Actions for
+  an explicit Restore during the server-enforced 30-day window. Restore returns
+  the Action to `pending`; it never restores automatically.
 - Skip is scoped to a Plan Item in its current plan. It leaves the underlying
   Action pending, so that Action may be evaluated on a later day.
 
@@ -133,6 +137,10 @@ pending → deferred
 pending → cancelled
 in_progress → deferred
 ```
+
+`cancelled` returns to `pending` only through an explicit Restore within the
+server-enforced 30-day window. `in_progress`, `paused`, and `deferred` Actions
+may be explicitly cancelled; cancellation is never an automatic planner state.
 
 Transitions must be validated by application/domain logic.
 
@@ -177,6 +185,18 @@ server. Completion records immutable target, final active seconds, and delta
 metadata from the lifecycle Plan Item snapshot when a target exists. Pause
 does not reactivate or reschedule work automatically; it is intentionally
 distinct from Defer.
+
+### Cancel / Restore
+
+Cancel is a deliberate persistent removal from the current working context,
+not a hard delete and not another spelling of Skip or Defer. It retains the
+Action, linked Goal/Project/Task relationships, and accumulated active time;
+an active session is flushed before cancellation. A matching lifecycle Plan
+Item becomes `cancelled`, if one exists, and the protected operation records
+`action_cancelled`. A user may explicitly Restore a recently cancelled Action
+within 30 days. Restore returns the Action to `pending`, records
+`action_restored`, and allows normal planning to evaluate it later; it does not
+silently recreate historical work or fabricate a new Plan Item.
 
 ### Skip
 

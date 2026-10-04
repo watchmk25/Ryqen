@@ -6,13 +6,15 @@ export type ProjectStatus = GoalStatus
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'blocked' | 'deferred'
 export type ActionStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'deferred'
 export type DailyPlanStatus = 'draft' | 'active' | 'completed' | 'archived'
-export type PlanItemStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'skipped' | 'deferred' | 'replaced'
+export type PlanItemStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'skipped' | 'deferred' | 'cancelled' | 'replaced'
 export type ActivityType =
   | 'action_started'
   | 'action_paused'
   | 'action_resumed'
   | 'action_completed'
   | 'action_deferred'
+  | 'action_cancelled'
+  | 'action_restored'
   | 'action_skipped'
   | 'task_started'
   | 'task_completed'
@@ -94,6 +96,8 @@ export interface Action {
   accumulatedActiveSeconds: number
   /** Start of the currently open active session; null outside in_progress. */
   startedAt: string | null
+  /** Server-authoritative cancellation time; retained only while cancelled. */
+  cancelledAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -153,6 +157,8 @@ export type UserFacingActivityType =
   | 'action_resumed'
   | 'action_completed'
   | 'action_deferred'
+  | 'action_cancelled'
+  | 'action_restored'
   | 'plan_item_skipped'
 
 /** UI-safe interpretation of an allow-listed lifecycle Activity. */
@@ -220,6 +226,16 @@ export interface PausedWork {
   planItem: PlanItem
 }
 
+/** A bounded, user-restorable view of persistent cancelled work. */
+export interface RecentCancelledWork {
+  action: Action
+}
+
+/** Pending work excluded only because a linked Goal or Project is inactive. */
+export interface InactiveParentWork {
+  action: Action
+}
+
 export type TodayEmptyState =
   | 'no_pending_work'
   | 'no_work_fits_current_time'
@@ -239,6 +255,8 @@ export interface TodayPlanState {
   pausedWork: PausedWork[]
   /** Explicitly deferred persistent work, kept secondary and reconsiderable. */
   deferredWork: DeferredWork[]
+  recentCancelledWork: RecentCancelledWork[]
+  inactiveParentWork: InactiveParentWork[]
   priorities: PriorityAction[]
   actions: Action[]
   /** Current user-owned structured work, supplied for Today-adjacent planning UI. */

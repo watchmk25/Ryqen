@@ -1,10 +1,13 @@
-import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, selectTodayPriorities } from '../domain/planning'
+import { createContextSnapshot, derivePlanningContext, deriveTodayEmptyState, hasInactiveActionParent, selectTodayPriorities } from '../domain/planning'
 import { prepareTodayCheckIn, type TodayCheckInInput } from '../domain/todayCheckIn'
 import { prepareWorkCapture, type WorkCaptureInput } from '../domain/workCapture'
 import { prepareCaptureParent, prepareGoalDraft, prepareGoalUpdate, prepareProjectDraft, prepareProjectUpdate, type GoalDraft, type GoalUpdate, type ProjectDraft, type ProjectUpdate } from '../domain/structuredWork'
 import { assertTodayBackendContractVersion } from '../domain/todayBackendContract'
-import type { ActiveWork, DeferredWork, PausedWork, PlanItem, PlanningData, PriorityAction, TodayPlanState } from '../domain/ryqen'
-import type { RyqenRepository, TodayActionMutationResult } from '../data/ryqenRepository'
+import type { ActiveWork, DeferredWork, InactiveParentWork, PausedWork, PlanItem, PlanningData, PriorityAction, RecentCancelledWork, TodayPlanState } from '../domain/ryqen'
+import type { CancelActionMutationResult, RyqenRepository, TodayActionMutationResult, UpdateActionInput } from '../data/ryqenRepository'
+
+export const CANCELLED_ACTION_RESTORE_WINDOW_DAYS = 30
+export const RECENT_CANCELLED_ACTION_LIMIT = 10
 
 export interface TodayCaptureResult {
   state: TodayPlanState
@@ -74,6 +77,18 @@ function pausedWorkFor(planItems: PlanItem[], data: PlanningData): PausedWork[] 
     const planItem = latestByAction.get(action.id)
     return planItem ? [{ action, planItem }] : []
   })
+}
+
+function inactiveParentWorkFor(data: PlanningData): InactiveParentWork[] {
+  return data.actions
+    .filter((action) => hasInactiveActionParent(action, data))
+    .map((action) => ({ action }))
+}
+
+function cancelledSince(now: Date): string {
+  const since = new Date(now)
+  since.setDate(since.getDate() - CANCELLED_ACTION_RESTORE_WINDOW_DAYS)
+  return since.toISOString()
 }
 
 function replaceAction(actions: TodayPlanState['actions'], action: TodayActionMutationResult['action']): TodayPlanState['actions'] {
@@ -169,6 +184,31 @@ function applySkipMutation(state: TodayPlanState, result: TodayActionMutationRes
   }
 }
 
+function applyCancelMutation(state: TodayPlanState, result: CancelActionMutationResult): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, result.action),
+    planItems: result.planItem ? replaceCurrentPlanItem(state.planItems, result.planItem) : state.planItems,
+    priorities: state.priorities.filter((item) => item.action.id !== result.action.id),
+    activeWork: state.activeWork.filter((work) => work.action.id !== result.action.id),
+    pausedWork: state.pausedWork.filter((work) => work.action.id !== result.action.id),
+    deferredWork: state.deferredWork.filter((work) => work.action.id !== result.action.id),
+    inactiveParentWork: state.inactiveParentWork.filter((work) => work.action.id !== result.action.id),
+    recentCancelledWork: [
+      { action: result.action },
+      ...state.recentCancelledWork.filter((work) => work.action.id !== result.action.id),
+    ].slice(0, RECENT_CANCELLED_ACTION_LIMIT),
+  }
+}
+
+function applyRestoreMutation(state: TodayPlanState, action: PlanningData['actions'][number]): TodayPlanState {
+  return {
+    ...state,
+    actions: replaceAction(state.actions, action),
+    recentCancelledWork: state.recentCancelledWork.filter((work) => work.action.id !== action.id),
+  }
+}
+
 /** Applies only the protected Pause/Resume RPC result; it never replans. */
 function applyPauseResumeMutation(
   state: TodayPlanState,
@@ -234,6 +274,12 @@ export class TodayService {
     const activeWork = activeWorkFor(lifecyclePlanItems, data)
     const pausedWork = pausedWorkFor(lifecyclePlanItems, data)
     const deferredWork = deferredWorkFor(lifecyclePlanItems, data)
+    const inactiveParentWork = inactiveParentWorkFor(data)
+    const recentCancelledWork: RecentCancelledWork[] = (await this.repository.listRecentCancelledActions(
+      userId,
+      cancelledSince(now),
+      RECENT_CANCELLED_ACTION_LIMIT,
+    )).map((action) => ({ action }))
     let plan = await this.repository.findDailyPlan(userId, planDate)
 
     if (!plan) {
@@ -244,6 +290,8 @@ export class TodayService {
           activeWork,
           pausedWork,
           deferredWork,
+          recentCancelledWork,
+          inactiveParentWork,
           priorities: [],
           actions: data.actions,
           goals: data.goals,
@@ -303,6 +351,8 @@ export class TodayService {
       activeWork,
       pausedWork,
       deferredWork,
+      recentCancelledWork,
+      inactiveParentWork,
       priorities: currentPriorities,
       actions: data.actions,
       goals: data.goals,
@@ -423,5 +473,48 @@ export class TodayService {
     }
     const result = await this.repository.reconsiderTodayAction(deferredWork.planItem.dailyPlanId, actionId)
     return applyReconsiderMutation(state, result)
+  }
+
+  async cancelAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const action = state.actions.find((item) => item.id === actionId)
+    if (!action || !['pending', 'in_progress', 'paused', 'deferred'].includes(action.status)) {
+      throw new Error('This action cannot be cancelled')
+    }
+    const planItem = state.priorities.find((item) => item.action.id === actionId)
+      ? pendingCurrentPlanItem(state, actionId)
+      : state.activeWork.find((work) => work.action.id === actionId)?.planItem
+        ?? state.pausedWork.find((work) => work.action.id === actionId)?.planItem
+        ?? state.deferredWork.find((work) => work.action.id === actionId)?.planItem
+        ?? null
+    const result = await this.repository.cancelAction(actionId, planItem?.dailyPlanId ?? null)
+    return applyCancelMutation(state, result)
+  }
+
+  async restoreCancelledAction(state: TodayPlanState, actionId: string): Promise<TodayPlanState> {
+    const cancelled = state.recentCancelledWork.find((work) => work.action.id === actionId)
+    if (!cancelled || cancelled.action.status !== 'cancelled') {
+      throw new Error('This cancelled action is no longer available to restore')
+    }
+    const action = await this.repository.restoreCancelledAction(actionId)
+    return applyRestoreMutation(state, action)
+  }
+
+  async updateAction(userId: string, actionId: string, input: UpdateActionInput, now = new Date()): Promise<TodayPlanState> {
+    await this.ensureTodayBackendContract()
+    const action = await this.repository.findAction(userId, actionId)
+    if (!action || action.status === 'completed' || action.status === 'cancelled') {
+      throw new Error('This action is no longer available to edit')
+    }
+    const title = input.title.trim()
+    if (!title) throw new Error('An action title is required.')
+    if (input.goalId && input.projectId) throw new Error('Choose either a goal or a project, not both.')
+    if (input.goalId && !await this.repository.findActiveGoal(userId, input.goalId)) {
+      throw new Error('Choose an active goal for this action.')
+    }
+    if (input.projectId && !await this.repository.findActiveProject(userId, input.projectId)) {
+      throw new Error('Choose an active project for this action.')
+    }
+    await this.repository.updateAction(actionId, { title, goalId: input.goalId, projectId: input.projectId })
+    return this.planToday(userId, now)
   }
 }

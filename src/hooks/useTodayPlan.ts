@@ -3,13 +3,14 @@ import { AppState, type AppStateStatus } from 'react-native'
 import { TodayService } from '../application/todayService'
 import { SupabaseRyqenRepository } from '../data/ryqenRepository'
 import type { GoalDraft, GoalUpdate, ProjectDraft, ProjectUpdate, TodayCheckInInput, TodayPlanState, WorkCaptureInput } from '../domain'
+import type { UpdateActionInput } from '../data/ryqenRepository'
 import { isTodayBackendCompatibilityError } from '../domain'
 import { acknowledgementForTodayAction, type TodayAcknowledgement } from './todayAcknowledgement'
 import { canMutateToday, transitionTodayAvailability, type TodayAvailability } from './todayAvailabilityState'
 import { transitionTodayError, type TodayCommandError, type TodayMutationOperation } from './todayErrorState'
 import { isCurrentTodayRevalidation, scheduleTodayMidnightRevalidation, shouldRevalidateWhenAppBecomesActive } from './todayFreshness'
 
-type TodayOperation = Exclude<TodayMutationOperation, 'capture' | 'check_in'>
+type TodayOperation = Exclude<TodayMutationOperation, 'capture' | 'check_in' | 'structured_work'>
 
 export function useTodayPlan(userId: string | undefined) {
   const service = useMemo(() => new TodayService(new SupabaseRyqenRepository()), [])
@@ -144,7 +145,11 @@ export function useTodayPlan(userId: string | undefined) {
             ? await service.deferAction(currentState, actionId)
             : operation === 'skip'
               ? await service.skipPlanItem(currentState, actionId)
-              : await service.reconsiderDeferredAction(currentState, actionId)
+              : operation === 'reconsider'
+                ? await service.reconsiderDeferredAction(currentState, actionId)
+                : operation === 'cancel'
+                  ? await service.cancelAction(currentState, actionId)
+                  : await service.restoreCancelledAction(currentState, actionId)
       revalidationGenerationRef.current += 1
       replaceState(nextState)
       applyAvailability({ type: 'received_current_state' })
@@ -152,7 +157,7 @@ export function useTodayPlan(userId: string | undefined) {
         ? acknowledgementForTodayAction(nextState, actionId, 'reconsidered')
         : null)
       applyError({ type: 'mutation_succeeded' })
-      if (operation === 'start' || operation === 'complete' || operation === 'defer' || operation === 'skip' || operation === 'reconsider') {
+      if (operation === 'start' || operation === 'complete' || operation === 'defer' || operation === 'skip' || operation === 'reconsider' || operation === 'cancel' || operation === 'restore') {
         // Let React commit the authoritative lifecycle patch first. The
         // planner then refreshes recommendations without using blocking
         // reload(), so the correctly patched Today state stays visible.
@@ -252,6 +257,28 @@ export function useTodayPlan(userId: string | undefined) {
     }
   }, [applyAvailability, applyError, reload, replaceState, service, userId])
 
+  const updateAction = useCallback(async (actionId: string, input: UpdateActionInput): Promise<boolean> => {
+    if (!userId || !canMutateToday(availabilityRef.current)) return false
+    setOrganizing(true)
+    setAcknowledgement(null)
+    applyError({ type: 'clear' })
+    try {
+      const nextState = await service.updateAction(userId, actionId, input)
+      replaceState(nextState)
+      applyAvailability({ type: 'received_current_state' })
+      applyError({ type: 'mutation_succeeded' })
+      return true
+    } catch (error) {
+      applyError(isTodayBackendCompatibilityError(error)
+        ? { type: 'backend_incompatible' }
+        : { type: 'mutation_failed', operation: 'structured_work' })
+      await reload({ preserveError: true })
+      return false
+    } finally {
+      setOrganizing(false)
+    }
+  }, [applyAvailability, applyError, reload, replaceState, service, userId])
+
   return {
     state,
     loading,
@@ -273,11 +300,14 @@ export function useTodayPlan(userId: string | undefined) {
     deferAction: (actionId: string) => perform('defer', actionId),
     skipPlanItem: (actionId: string) => perform('skip', actionId),
     reconsiderDeferredAction: (actionId: string) => perform('reconsider', actionId),
+    cancelAction: (actionId: string) => perform('cancel', actionId),
+    restoreCancelledAction: (actionId: string) => perform('restore', actionId),
     captureAction,
     applyTodayCheckIn,
     createGoal: (input: GoalDraft) => updateStructuredWork('create_goal', null, input),
     updateGoal: (goalId: string, input: GoalUpdate) => updateStructuredWork('update_goal', goalId, input),
     createProject: (input: ProjectDraft) => updateStructuredWork('create_project', null, input),
     updateProject: (projectId: string, input: ProjectUpdate) => updateStructuredWork('update_project', projectId, input),
+    updateAction,
   }
 }

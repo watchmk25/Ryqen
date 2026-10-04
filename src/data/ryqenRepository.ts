@@ -105,6 +105,15 @@ export interface UpdateActionParentInput {
   projectId: string | null
 }
 
+export interface UpdateActionInput extends UpdateActionParentInput {
+  title: string
+}
+
+export interface CancelActionMutationResult {
+  action: Action
+  planItem: PlanItem | null
+}
+
 export interface CreateContextInput {
   userId: string
   key: string
@@ -120,6 +129,7 @@ export interface CreateContextInput {
 export interface RyqenRepository {
   getTodayBackendContractVersion(): Promise<number>
   loadPlanningData(userId: string): Promise<PlanningData>
+  findAction(userId: string, actionId: string): Promise<Action | null>
   findActiveGoal(userId: string, goalId: string): Promise<Goal | null>
   findActiveProject(userId: string, projectId: string): Promise<Project | null>
   listRecentActivities(userId: string): Promise<ActivityHistoryRecord[]>
@@ -137,6 +147,8 @@ export interface RyqenRepository {
   updateProject(id: string, input: UpdateProjectInput): Promise<Project>
   createCapturedAction(input: CreateCapturedActionInput): Promise<Action>
   updateActionParent(id: string, input: UpdateActionParentInput): Promise<Action>
+  updateAction(id: string, input: UpdateActionInput): Promise<Action>
+  listRecentCancelledActions(userId: string, since: string, limit: number): Promise<Action[]>
   startTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   pauseTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   resumeTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
@@ -144,6 +156,8 @@ export interface RyqenRepository {
   deferTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   skipTodayPlanItem(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
   reconsiderTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult>
+  cancelAction(actionId: string, dailyPlanId: string | null): Promise<CancelActionMutationResult>
+  restoreCancelledAction(actionId: string): Promise<Action>
 }
 
 function requireString(value: unknown, field: string): string {
@@ -221,7 +235,24 @@ function mapAction(row: DatabaseRow): Action {
     dueDate: nullableString(row.due_date), dueTime: nullableString(row.due_time), dueAt: nullableString(row.due_at),
     accumulatedActiveSeconds: nonNegativeInteger(row.accumulated_active_seconds, 'actions.accumulated_active_seconds'),
     startedAt: nullableString(row.started_at),
+    cancelledAt: nullableString(row.cancelled_at),
     createdAt: requireString(row.created_at, 'actions.created_at'), updatedAt: requireString(row.updated_at, 'actions.updated_at'),
+  }
+}
+
+function mapCancelActionMutationResult(value: unknown): CancelActionMutationResult {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Invalid cancel action response from Supabase')
+  }
+  const result = value as DatabaseRow
+  if (typeof result.action !== 'object' || result.action === null) {
+    throw new Error('Incomplete cancel action response from Supabase')
+  }
+  return {
+    action: mapAction(result.action as DatabaseRow),
+    planItem: typeof result.plan_item === 'object' && result.plan_item !== null
+      ? mapPlanItem(result.plan_item as DatabaseRow)
+      : null,
   }
 }
 
@@ -293,6 +324,12 @@ export class SupabaseRyqenRepository implements RyqenRepository {
       tasks: (unwrap(tasksResult.data, tasksResult.error, 'Load tasks') as DatabaseRow[]).map(mapTask),
       actions: (unwrap(actionsResult.data, actionsResult.error, 'Load actions') as DatabaseRow[]).map(mapAction),
     }
+  }
+
+  async findAction(userId: string, actionId: string): Promise<Action | null> {
+    const result = await supabase.from('actions').select('*').eq('id', actionId).eq('user_id', userId).maybeSingle()
+    const data = unwrap(result.data, result.error, 'Find action')
+    return data ? mapAction(data as DatabaseRow) : null
   }
 
   async findActiveGoal(userId: string, goalId: string): Promise<Goal | null> {
@@ -462,6 +499,22 @@ export class SupabaseRyqenRepository implements RyqenRepository {
     return mapAction(unwrap(result.data, result.error, 'Attach action parent') as DatabaseRow)
   }
 
+  async updateAction(id: string, input: UpdateActionInput): Promise<Action> {
+    const result = await supabase.from('actions').update({
+      title: input.title,
+      goal_id: input.goalId,
+      project_id: input.projectId,
+    }).eq('id', id).select('*').single()
+    return mapAction(unwrap(result.data, result.error, 'Update action') as DatabaseRow)
+  }
+
+  async listRecentCancelledActions(userId: string, since: string, limit: number): Promise<Action[]> {
+    const result = await supabase.from('actions').select('*')
+      .eq('user_id', userId).eq('status', 'cancelled').gte('cancelled_at', since)
+      .order('cancelled_at', { ascending: false }).order('id', { ascending: false }).limit(limit)
+    return (unwrap(result.data, result.error, 'List recent cancelled actions') as DatabaseRow[]).map(mapAction)
+  }
+
   private async runTodayActionRpc(
     functionName: 'ryqen_start_today_action' | 'ryqen_pause_today_action' | 'ryqen_resume_today_action' | 'ryqen_complete_today_action' | 'ryqen_defer_today_action' | 'ryqen_skip_today_plan_item' | 'ryqen_reconsider_today_action',
     dailyPlanId: string,
@@ -497,5 +550,15 @@ export class SupabaseRyqenRepository implements RyqenRepository {
 
   reconsiderTodayAction(dailyPlanId: string, actionId: string): Promise<TodayActionMutationResult> {
     return this.runTodayActionRpc('ryqen_reconsider_today_action', dailyPlanId, actionId)
+  }
+
+  async cancelAction(actionId: string, dailyPlanId: string | null): Promise<CancelActionMutationResult> {
+    const result = await supabase.rpc('ryqen_cancel_action', { p_action_id: actionId, p_daily_plan_id: dailyPlanId })
+    return mapCancelActionMutationResult(unwrap(result.data, result.error, 'Cancel action'))
+  }
+
+  async restoreCancelledAction(actionId: string): Promise<Action> {
+    const result = await supabase.rpc('ryqen_restore_cancelled_action', { p_action_id: actionId })
+    return mapAction(unwrap(result.data, result.error, 'Restore cancelled action') as DatabaseRow)
   }
 }

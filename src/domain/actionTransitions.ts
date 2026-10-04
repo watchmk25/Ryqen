@@ -2,13 +2,13 @@ import type { ActionStatus } from './ryqen'
 
 const transitions: Record<ActionStatus, ActionStatus[]> = {
   pending: ['in_progress', 'deferred', 'cancelled'],
-  in_progress: ['completed', 'deferred', 'paused'],
-  paused: ['in_progress'],
+  in_progress: ['completed', 'deferred', 'paused', 'cancelled'],
+  paused: ['in_progress', 'cancelled'],
   completed: [],
-  cancelled: [],
+  cancelled: ['pending'],
   // Reconsideration is an explicit user decision. Nothing in the planner
   // performs this transition automatically.
-  deferred: ['pending'],
+  deferred: ['pending', 'cancelled'],
 }
 
 export function canTransitionAction(from: ActionStatus, to: ActionStatus): boolean {

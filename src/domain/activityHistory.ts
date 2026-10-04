@@ -6,6 +6,8 @@ const activityLabels: Record<UserFacingActivityType, string> = {
   action_resumed: 'Resumed',
   action_completed: 'Completed',
   action_deferred: 'Deferred',
+  action_cancelled: 'Cancelled',
+  action_restored: 'Restored',
   plan_item_skipped: 'Skipped',
 }
 
@@ -15,6 +17,8 @@ export const userFacingActivityTypes: readonly UserFacingActivityType[] = [
   'action_resumed',
   'action_completed',
   'action_deferred',
+  'action_cancelled',
+  'action_restored',
   'plan_item_skipped',
 ]
 

@@ -55,16 +55,16 @@ test('recent Activity repository read is owner-scoped, bounded, and deterministi
   assert.deepEqual(client.calls[0], {
     table: 'activities',
     select: 'id,user_id,action_id,type,metadata,occurred_at',
-    filters: [['eq', 'user_id', userId], ['in', 'type', ['action_started', 'action_paused', 'action_resumed', 'action_completed', 'action_deferred', 'plan_item_skipped']]],
+    filters: [['eq', 'user_id', userId], ['in', 'type', ['action_started', 'action_paused', 'action_resumed', 'action_completed', 'action_deferred', 'action_cancelled', 'action_restored', 'plan_item_skipped']]],
     orders: [['occurred_at', { ascending: false }], ['id', { ascending: false }]],
     limit: 50,
   })
   assert.deepEqual(client.calls[1].filters, [['eq', 'user_id', userId], ['in', 'id', ['action-1', 'missing-action']]])
 })
 
-test('Activity History service exposes only the six supported user-facing lifecycle events', async () => {
+test('Activity History service exposes only the supported user-facing lifecycle events', async () => {
   const records = [
-    'action_started', 'action_paused', 'action_resumed', 'action_completed', 'action_deferred', 'plan_item_skipped',
+    'action_started', 'action_paused', 'action_resumed', 'action_completed', 'action_deferred', 'action_cancelled', 'action_restored', 'plan_item_skipped',
     'plan_item_started', 'plan_item_completed', 'action_skipped', 'task_started', 'task_completed', 'goal_progress', 'future_event',
   ].map((type, index) => record({ id: `activity-${index}`, type }))
   const service = new ActivityHistoryService({
@@ -76,7 +76,7 @@ test('Activity History service exposes only the six supported user-facing lifecy
 
   const activities = await service.listRecentActivities(userId)
 
-  assert.deepEqual(activities.map((activity) => activity.label), ['Started', 'Paused', 'Resumed', 'Completed', 'Deferred', 'Skipped'])
+  assert.deepEqual(activities.map((activity) => activity.label), ['Started', 'Paused', 'Resumed', 'Completed', 'Deferred', 'Cancelled', 'Restored', 'Skipped'])
 })
 
 test('Activity History resolves Action subjects and falls back safely when the Action is unavailable', () => {

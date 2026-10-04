@@ -27,6 +27,7 @@ type PriorityCardProps = {
   onComplete: (actionId: string) => void
   onDefer: (actionId: string) => void
   onSkip: (actionId: string) => void
+  onManage: (actionId: string) => void
 }
 
 type WorkCaptureCardProps = {
@@ -380,7 +381,7 @@ function TodayCheckInSheet({
   )
 }
 
-function PriorityCard({ priority, planItem, position, variant = 'priority', pending, pendingOperation, unavailable, onStart, onPause, onComplete, onDefer, onSkip }: PriorityCardProps) {
+function PriorityCard({ priority, planItem, position, variant = 'priority', pending, pendingOperation, unavailable, onStart, onPause, onComplete, onDefer, onSkip, onManage }: PriorityCardProps) {
   const isActiveWork = variant === 'active'
   const isLead = !isActiveWork && position === 1
   const isInProgress = priority.action.status === 'in_progress'
@@ -475,6 +476,9 @@ function PriorityCard({ priority, planItem, position, variant = 'priority', pend
           </TouchableOpacity>
         )}
       </View>
+      <TouchableOpacity disabled={pending || unavailable} onPress={() => onManage(priority.action.id)} style={{ alignSelf: 'flex-start', paddingVertical: 2 }}>
+        <Text style={{ color: C.t2, fontSize: 11, fontWeight: '700' }}>Manage</Text>
+      </TouchableOpacity>
     </View>
   )
 }
@@ -483,6 +487,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const [showDeferred, setShowDeferred] = useState(false)
   const [showCapture, setShowCapture] = useState(false)
   const [showPlan, setShowPlan] = useState(false)
+  const [manageActionId, setManageActionId] = useState<string | null>(null)
   const [captureTitle, setCaptureTitle] = useState('')
   const [captureDueTiming, setCaptureDueTiming] = useState<CaptureDueTiming>('none')
   const [customDueDate, setCustomDueDate] = useState('')
@@ -523,6 +528,9 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
     applyTodayCheckIn,
     createGoal,
     createProject,
+    updateAction,
+    cancelAction,
+    restoreCancelledAction,
   } = useTodayPlan(userId)
 
   const deferredItems = state?.deferredWork ?? []
@@ -531,6 +539,11 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
   const rankColor = RANK_COLORS[rank] ?? C.accent
   const activeGoals = state?.goals.filter((goal) => goal.status === 'active') ?? []
   const activeProjects = state?.projects.filter((project) => project.status === 'active') ?? []
+
+  function openManageAction(actionId: string) {
+    setManageActionId(actionId)
+    setShowPlan(true)
+  }
 
   useEffect(() => {
     let current = true
@@ -742,11 +755,18 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
         visible={showPlan}
         goals={state?.goals ?? []}
         projects={state?.projects ?? []}
+        actions={state?.actions ?? []}
+        inactiveParentActions={state?.inactiveParentWork.map((work) => work.action) ?? []}
+        recentCancelledActions={state?.recentCancelledWork.map((work) => work.action) ?? []}
+        manageActionId={manageActionId}
         saving={organizing}
         unavailable={isTodayUnavailable}
-        onClose={() => { if (!organizing) setShowPlan(false) }}
+        onClose={() => { if (!organizing) { setShowPlan(false); setManageActionId(null) } }}
         onCreateGoal={createGoal}
         onCreateProject={createProject}
+        onUpdateAction={updateAction}
+        onCancelAction={(actionId) => void cancelAction(actionId)}
+        onRestoreAction={(actionId) => void restoreCancelledAction(actionId)}
       />
 
       {loading && (
@@ -800,6 +820,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               onComplete={(actionId) => void completeAction(actionId)}
               onDefer={(actionId) => void deferAction(actionId)}
               onSkip={(actionId) => void skipPlanItem(actionId)}
+              onManage={openManageAction}
             />
           ))}
         </View>
@@ -820,6 +841,7 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
               onComplete={(actionId) => void completeAction(actionId)}
               onDefer={(actionId) => void deferAction(actionId)}
               onSkip={(actionId) => void skipPlanItem(actionId)}
+              onManage={openManageAction}
             />
           ))}
         </View>
@@ -842,6 +864,9 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
                   style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
                 >
                   <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending && pendingOperation === 'resume' ? 'Resuming...' : 'Resume'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity disabled={pending || isTodayUnavailable} onPress={() => openManageAction(action.id)} style={{ paddingVertical: 9 }}>
+                  <Text style={{ color: C.t2, fontSize: 12, fontWeight: '800' }}>Manage</Text>
                 </TouchableOpacity>
               </View>
             )
@@ -883,6 +908,9 @@ export function HomeTab({ userId, userName, rank, onNavigateToTools }: HomeTabPr
                   style={{ backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 }}
                 >
                   <Text style={{ color: C.t1, fontSize: 12, fontWeight: '800' }}>{pending ? 'Reconsidering...' : 'Reconsider'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity disabled={pending || isTodayUnavailable} onPress={() => openManageAction(action.id)} style={{ paddingVertical: 9 }}>
+                  <Text style={{ color: C.t2, fontSize: 12, fontWeight: '800' }}>Manage</Text>
                 </TouchableOpacity>
               </View>
             )

@@ -130,7 +130,8 @@ The adaptive, date-scoped snapshot of recommended work/actions for the current c
 Durable records of meaningful lifecycle work or progress. V0.1 exposes a
 small, read-only **Recent activity** view from Profile, interpreted from the
 existing owner-scoped `activities` table. It allow-lists meaningful Action
-lifecycle events (Started, Paused, Resumed, Completed, Deferred, and Skipped)
+lifecycle events (Started, Paused, Resumed, Completed, Deferred, Cancelled,
+Restored, and Skipped)
 while hiding technical Plan Item lifecycle records. Completion rows may show
 the existing deterministic target/active/delta metadata. This is a user-facing
 interpretation, not an internal audit/security log, analytics dashboard, or a
@@ -210,6 +211,14 @@ Meaningful Today lifecycle mutations use protected Supabase RPC boundaries. Thos
 
 Pause is a persisted lifecycle state, distinct from Defer: `in_progress -> paused -> in_progress`. A Pause preserves its historical Plan Item anchor, removes the Action from Active Work and fresh recommendations, and requires explicit Resume. `actions.started_at` marks only the current open active session; `actions.accumulated_active_seconds` stores previously closed active sessions. Pause and active Defer flush the open session server-side and clear `started_at`; Resume opens a new session while preserving accumulated time; Complete flushes and persists the final total. Defer instead moves work out of the immediate context and requires explicit Reconsider before it can become pending again.
 
+Cancel is a distinct, persistent lifecycle decision: it retains the Action and
+its parent relationships, changes a matching lifecycle Plan Item to
+`cancelled` when one exists, and records `action_cancelled`. Its
+server-authored `cancelled_at` permits an explicit Restore for 30 days; Restore
+returns only the persistent Action to `pending`, records `action_restored`, and
+never silently reactivates work. The bounded recovery view is not a backlog or
+new planning surface, and cancelled Actions are never fresh recommendations.
+
 Today lifecycle interactions that can affect the fresh recommendation space use
 an authoritative latency boundary:
 
@@ -245,7 +254,7 @@ Reconciliation cannot use an invalid lifecycle Action to create a fresh pending 
 ### Hosted backend compatibility
 
 The Today client requires the authenticated read-only backend contract RPC
-`ryqen_today_backend_contract`, currently contract version `4`, before it
+`ryqen_today_backend_contract`, currently contract version `5`, before it
 loads plans or requests a Today mutation. This is a safety net that presents a
 clear backend-update message when the endpoint is absent or its version is
 unsupported; ordinary network/request failures remain ordinary Today refresh
